@@ -1,0 +1,30 @@
+{
+	auto_https off
+}
+
+http://account.localhost {
+	redir http://profile.localhost:8088/account{uri} 308
+}
+
+http://profile.localhost {
+	handle /.well-known/jwks.json {
+		reverse_proxy account:8081
+	}
+
+	@accountApi path /api/auth* /api/users* /api/sessions* /api/search* /api/avatars* /api/notifications* /api/profile /api/profile/*
+	handle @accountApi {
+		reverse_proxy account:8081
+	}
+
+	handle /api/* {
+		reverse_proxy profile-backend:8080
+	}
+
+	handle_path /account/* {
+		reverse_proxy account:8080
+	}
+
+	handle {
+		reverse_proxy profile-frontend:80
+	}
+}

@@ -1,0 +1,150 @@
+name: profile-service
+
+x-account-env: &account-env
+  ACCOUNT_ENV: development
+  ACCOUNT_DATABASE_JDBC_URL: jdbc:postgresql://account-postgres:5432/account
+  ACCOUNT_DATABASE_USERNAME: account
+  ACCOUNT_DATABASE_PASSWORD: ${ACCOUNT_DATABASE_PASSWORD:-account}
+  ACCOUNT_REDIS_URL: redis://:${ACCOUNT_REDIS_PASSWORD:-account}@account-redis:6379
+  ACCOUNT_SMTP_HOST: mail
+  ACCOUNT_SMTP_PORT: "1025"
+  ACCOUNT_SMTP_FROM: no-reply@account.local
+  ACCOUNT_SMTP_STARTTLS: "false"
+  ACCOUNT_S3_ENDPOINT: http://s3:9000
+  ACCOUNT_S3_PUBLIC_URL: /api/avatars
+  ACCOUNT_S3_ACCESS_KEY: ${ACCOUNT_S3_ACCESS_KEY:-account}
+  ACCOUNT_S3_SECRET_KEY: ${ACCOUNT_S3_SECRET_KEY:-account-secret}
+  ACCOUNT_S3_BUCKET: avatars
+  ACCOUNT_JWT_ISSUER: account-service
+  ACCOUNT_JWT_AUDIENCE: account
+  ACCOUNT_JWT_ACTIVE_KID: dev
+  ACCOUNT_JWT_PRIVATE_KEY_FILE: /run/secrets/account-jwt-private.pem
+  ACCOUNT_JWT_PUBLIC_KEY_FILE: /run/secrets/account-jwt-public.pem
+  ACCOUNT_SECURITY_OTP_HMAC_SECRET: ${ACCOUNT_SECURITY_OTP_HMAC_SECRET:-dev-hmac-secret-at-least-32-chars}
+  ACCOUNT_SECURITY_INTERNAL_AUTH_SECRET: ${ACCOUNT_SECURITY_INTERNAL_AUTH_SECRET:-dev-internal-secret-at-least-32-chars}
+  ACCOUNT_HTTP_ALLOWED_ORIGINS: http://profile.localhost:8088
+  ACCOUNT_HTTP_COOKIE_DOMAIN: ${ACCOUNT_HTTP_COOKIE_DOMAIN:-}
+  ACCOUNT_HTTP_COOKIE_SECURE: "false"
+  ACCOUNT_API_BASE_URL: /api
+  ACCOUNT_FRONTEND_BASE_PATH: /account/
+  ACCOUNT_TRUSTED_REDIRECT_ORIGINS: http://profile.localhost:8088
+  ACCOUNT_GRPC_ENABLED: "false"
+
+x-account-build: &account-build
+  context: ./account-src
+  dockerfile: ../account.Dockerfile
+
+services:
+  caddy:
+    image: caddy:2.8-alpine
+    ports:
+      - "8088:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - account
+      - profile-backend
+      - profile-frontend
+
+  account-migrate:
+    image: ${ACCOUNT_IMAGE:-profile-service-account:dev}
+    build: *account-build
+    entrypoint: ["/usr/local/bin/migrate"]
+    environment: *account-env
+    volumes:
+      - ./secrets/account-jwt-private.pem:/run/secrets/account-jwt-private.pem:ro
+      - ./secrets/account-jwt-public.pem:/run/secrets/account-jwt-public.pem:ro
+    depends_on:
+      account-postgres: { condition: service_healthy }
+
+  account:
+    image: ${ACCOUNT_IMAGE:-profile-service-account:dev}
+    build: *account-build
+    environment: *account-env
+    volumes:
+      - ./secrets/account-jwt-private.pem:/run/secrets/account-jwt-private.pem:ro
+      - ./secrets/account-jwt-public.pem:/run/secrets/account-jwt-public.pem:ro
+    depends_on:
+      account-migrate: { condition: service_completed_successfully }
+      account-redis: { condition: service_healthy }
+      s3-init: { condition: service_completed_successfully }
+      mail: { condition: service_started }
+
+  profile-backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    environment:
+      PROFILE_HTTP_PORT: "8080"
+      PROFILE_ACCOUNT_API_URL: http://account:8081/api
+      PROFILE_ACCOUNT_FRONTEND_URL: http://profile.localhost:8088/account
+      PROFILE_PUBLIC_URL: http://profile.localhost:8088
+      PROFILE_ALLOWED_ORIGINS: http://profile.localhost:8088
+    depends_on:
+      account: { condition: service_started }
+
+  profile-frontend:
+    build:
+      context: ..
+      dockerfile: frontend/Dockerfile
+    environment:
+      PROFILE_API_BASE_URL: /api
+      PROFILE_FRONTEND_BASE_PATH: /
+      PROFILE_ACCOUNT_FRONTEND_URL: http://profile.localhost:8088/account
+    depends_on:
+      - profile-backend
+
+  account-postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: account
+      POSTGRES_USER: account
+      POSTGRES_PASSWORD: ${ACCOUNT_DATABASE_PASSWORD:-account}
+    volumes:
+      - account_postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U account -d account"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  account-redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --requirepass "${ACCOUNT_REDIS_PASSWORD:-account}"
+    volumes:
+      - account_redis:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a '${ACCOUNT_REDIS_PASSWORD:-account}' ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  s3:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: ${ACCOUNT_S3_ACCESS_KEY:-account}
+      MINIO_ROOT_PASSWORD: ${ACCOUNT_S3_SECRET_KEY:-account-secret}
+    volumes:
+      - account_s3:/data
+
+  s3-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - until mc alias set local http://s3:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do sleep 2; done; mc mb -p local/avatars || true
+    environment:
+      MINIO_ROOT_USER: ${ACCOUNT_S3_ACCESS_KEY:-account}
+      MINIO_ROOT_PASSWORD: ${ACCOUNT_S3_SECRET_KEY:-account-secret}
+    depends_on:
+      - s3
+
+  mail:
+    image: mailhog/mailhog:v1.0.1
+    ports:
+      - "${MAILHOG_HTTP_PORT:-8027}:8025"
+
+volumes:
+  account_postgres:
+  account_redis:
+  account_s3:

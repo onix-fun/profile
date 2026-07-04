@@ -1,0 +1,14 @@
+.git
+.DS_Store
+
+frontend/node_modules
+frontend/dist
+frontend/*.tsbuildinfo
+
+backend/build
+backend/.gradle
+backend/.kotlin
+
+dev/.env
+dev/secrets
+dev/account-src
