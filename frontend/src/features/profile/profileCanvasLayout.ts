@@ -9,6 +9,9 @@ export type ProfileCanvasNodeId =
   | "birthday"
   | "followers"
   | "following"
+  | "posts"
+  | "stories"
+  | "comments"
   | "followAction"
   | "settingsAction";
 
@@ -55,6 +58,9 @@ export const ORBIT_OFFSETS: Record<ProfileCanvasNodeId, ProfileCanvasPoint> = {
   birthday: { x: -155, y: 220 },
   followers: { x: -285, y: 70 },
   following: { x: -265, y: -105 },
+  posts: { x: 360, y: -190 },
+  stories: { x: 420, y: 0 },
+  comments: { x: 360, y: 190 },
   followAction: { x: 0, y: 180 },
   settingsAction: { x: 0, y: 180 },
 };
@@ -68,6 +74,9 @@ const NODE_SIZES: Record<ProfileCanvasNodeId, ProfileCanvasSize> = {
   birthday: { width: 170, height: 52 },
   followers: { width: 166, height: 74 },
   following: { width: 166, height: 74 },
+  posts: { width: 176, height: 74 },
+  stories: { width: 176, height: 74 },
+  comments: { width: 176, height: 74 },
   followAction: { width: 172, height: 48 },
   settingsAction: { width: 172, height: 48 },
 };

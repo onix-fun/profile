@@ -20,5 +20,5 @@ const source = window.__PROFILE_CONFIG__ || {};
 export const runtimeConfig: ProfileRuntimeConfig = {
   apiBaseUrl: (source.apiBaseUrl || "/api").replace(/\/$/, ""),
   frontendBasePath: normalizePath(source.frontendBasePath || "/", "/"),
-  accountFrontendUrl: (source.accountFrontendUrl || "http://localhost:5174").replace(/\/$/, ""),
+  accountFrontendUrl: (source.accountFrontendUrl || "http://profile.localhost:8088/account").replace(/\/$/, ""),
 };

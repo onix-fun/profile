@@ -1,12 +1,51 @@
 import { createRouter, createWebHistory } from "vue-router";
 import { runtimeConfig } from "@/runtime-config";
+import { ProfileService } from "@/api/profileService";
+import FeedPage from "@/features/content/FeedPage.vue";
+import PostOverlay from "@/features/post/PostOverlay.vue";
+
+let sessionCheck: Promise<unknown> | null = null;
+
+function requireSession(): Promise<unknown> {
+  sessionCheck = ProfileService.session().catch((error) => {
+    sessionCheck = null;
+    throw error;
+  });
+  return sessionCheck;
+}
 
 export const router = createRouter({
   history: createWebHistory(runtimeConfig.frontendBasePath),
   routes: [
     {
       path: "/",
-      redirect: "/u/me",
+      name: "Feed",
+      component: FeedPage,
+    },
+    {
+      path: "/search",
+      name: "Search",
+      component: () => import("@/features/content/SearchPage.vue"),
+    },
+    {
+      path: "/p/:postId",
+      name: "PostOverlay",
+      component: PostOverlay,
+    },
+    {
+      path: "/post/new",
+      name: "CreatePost",
+      component: () => import("@/features/editor/PostCreatePage.vue"),
+    },
+    {
+      path: "/story/new",
+      name: "CreateStory",
+      component: () => import("@/features/stories/StoryCreatePage.vue"),
+    },
+    {
+      path: "/story/:storyId",
+      name: "StoryViewer",
+      component: () => import("@/features/stories/StoryViewer.vue"),
     },
     {
       path: "/u/:nickname",
@@ -15,7 +54,11 @@ export const router = createRouter({
     },
     {
       path: "/:pathMatch(.*)*",
-      redirect: "/u/me",
+      redirect: "/",
     },
   ],
+});
+
+router.beforeEach(async () => {
+  await requireSession();
 });

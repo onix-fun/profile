@@ -2,10 +2,11 @@
 
 ## Project Structure & Module Organization
 
-This repository contains a thin Profile Service over Account. Keep frontend, backend, dev topology, and documentation separate:
+This repository contains Profile and Content services over Account. Keep frontend, backend services, dev topology, and documentation separate:
 
-- `backend/` for Kotlin/Ktor API code, Account adapter, and backend tests.
-- `frontend/` for Vue 3, PrimeVue, Vue Flow UI, and frontend tests.
+- `profile-service/` for Kotlin/Ktor Profile API code, Account adapter, Content adapter, and Profile tests.
+- `content-service/` for Kotlin/Ktor Content API code, persistence, Account/Media/Search adapters, and Content tests.
+- `frontend/` for Vue 3, PrimeVue, deterministic canvas UI, and frontend tests.
 - `dev/` for local Caddy, Docker Compose topology, and generated dev secrets.
 - `docs/` for integration notes and operational decisions.
 
@@ -16,13 +17,14 @@ Avoid committing generated build outputs, local caches, secrets, or editor-speci
 - `cd frontend && npm install`: install frontend dependencies.
 - `cd frontend && npm run test`: run Vitest unit tests.
 - `cd frontend && npm run build`: typecheck and build the Vue app.
-- `cd backend && JAVA_HOME=<jdk21> gradle --no-daemon test`: compile and test backend.
+- `cd profile-service && JAVA_HOME=<jdk21> gradle --no-daemon test`: compile and test Profile backend.
+- `cd content-service && JAVA_HOME=<jdk21> gradle --no-daemon test`: compile and test Content backend.
 - `make dev`: generate local Account JWT keys and start the full Caddy/Account/Profile stack.
 - `make compose-config`: validate the local Docker Compose topology.
 
 ## Coding Style & Naming Conventions
 
-Use Kotlin package `com.onix.profile` and Vue aliases via `@/`. Keep UI layout deterministic: users must not edit or persist Vue Flow node positions. Environment variables use the `PROFILE_*` prefix, for example `PROFILE_ACCOUNT_API_URL`.
+Use Kotlin packages `com.onix.profile` and `com.onix.content`, and Vue aliases via `@/`. Keep UI layout deterministic: users must not edit or persist canvas node positions. Environment variables use `PROFILE_*` for Profile and `CONTENT_*` for Content.
 
 ## Testing Guidelines
 

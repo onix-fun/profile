@@ -35,3 +35,14 @@ private fun browserCookieName(name: String): String {
 ```
 
 With `ACCOUNT_HTTP_COOKIE_DOMAIN=.onix.fun`, Profile Service will receive `access_token` and forward it to Account API as `Authorization: Bearer <token>`.
+
+## Required Account Internal Visibility API
+
+Content Service treats Account as the trusted source for privacy, follows, blocks, and close-friends membership. The local dev sync applies `dev/account-patches/0002-internal-visibility-api.patch`, which adds:
+
+```http
+GET /api/internal/visibility?ownerId=<uuid>&viewerId=<uuid>
+Authorization: Bearer <viewer access token>
+```
+
+The response includes `ownerId`, `viewerId`, `isPrivate`, `relationship`, `isBlocked`, and `isCloseFriend`. Content uses this response before exposing profile posts or stories to Profile Service.

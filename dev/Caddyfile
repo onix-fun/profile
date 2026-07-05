@@ -16,8 +16,20 @@ http://profile.localhost {
 		reverse_proxy account:8081
 	}
 
+	handle /graphql* {
+		reverse_proxy content-service:8080
+	}
+
+	handle /subscriptions* {
+		reverse_proxy content-service:8080
+	}
+
+	handle /content-media/* {
+		reverse_proxy content-service:8080
+	}
+
 	handle /api/* {
-		reverse_proxy profile-backend:8080
+		reverse_proxy profile-service:8080
 	}
 
 	handle_path /account/* {

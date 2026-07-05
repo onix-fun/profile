@@ -35,6 +35,7 @@ describe("profile canvas layout", () => {
   it("uses deterministic orbit positions for automatic layout", () => {
     expect(ORBIT_OFFSETS.avatar).toEqual({ x: 0, y: 0 });
     expect(ORBIT_OFFSETS.followAction).toEqual({ x: 0, y: 180 });
+    expect(ORBIT_OFFSETS.posts).toEqual({ x: 360, y: -190 });
   });
 
   it("computes a horizontal stage and centers the avatar initially", () => {

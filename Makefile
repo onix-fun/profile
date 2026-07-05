@@ -2,7 +2,7 @@ COMPOSE ?= docker compose
 GRADLE ?= gradle
 DEV_ENV ?= dev/.env
 
-.PHONY: dev dev-account-source dev-env dev-keys frontend-install frontend-test frontend-build backend-test backend-build compose-config compose-down
+.PHONY: dev dev-account-source dev-env dev-keys frontend-install frontend-test frontend-build profile-test profile-build content-test content-build backend-test backend-build compose-config compose-down
 
 frontend-install:
 	cd frontend && npm install
@@ -13,11 +13,21 @@ frontend-test:
 frontend-build:
 	cd frontend && npm run build
 
-backend-test:
-	cd backend && $(GRADLE) test
+profile-test:
+	cd profile-service && $(GRADLE) test
 
-backend-build:
-	cd backend && $(GRADLE) installDist
+profile-build:
+	cd profile-service && $(GRADLE) installDist
+
+content-test:
+	cd content-service && $(GRADLE) test
+
+content-build:
+	cd content-service && $(GRADLE) installDist
+
+backend-test: profile-test
+
+backend-build: profile-build
 
 dev: dev-env dev-keys dev-account-source
 	$(COMPOSE) --env-file $(DEV_ENV) -f dev/docker-compose.yml up --build

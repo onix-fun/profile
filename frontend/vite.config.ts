@@ -16,6 +16,15 @@ export default defineConfig({
         target: "http://localhost:8090",
         changeOrigin: true,
       },
+      "/graphql": {
+        target: "http://localhost:8091",
+        changeOrigin: true,
+      },
+      "/subscriptions": {
+        target: "http://localhost:8091",
+        changeOrigin: true,
+        ws: true,
+      },
     },
   },
 });

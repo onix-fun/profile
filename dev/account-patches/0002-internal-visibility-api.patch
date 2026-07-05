@@ -1,0 +1,51 @@
+diff --git a/backend/src/main/kotlin/profile/api/rest/SocialDtos.kt b/backend/src/main/kotlin/profile/api/rest/SocialDtos.kt
+--- a/backend/src/main/kotlin/profile/api/rest/SocialDtos.kt
++++ b/backend/src/main/kotlin/profile/api/rest/SocialDtos.kt
+@@ -96,5 +96,15 @@ data class PrivacySettingsResponse(
+     val fieldVisibility: FieldVisibilityResponse = FieldVisibilityResponse()
+ )
+ 
++@Serializable
++data class InternalVisibilityResponse(
++    val ownerId: String,
++    val viewerId: String?,
++    val isPrivate: Boolean,
++    val relationship: RelationshipResponse,
++    val isBlocked: Boolean,
++    val isCloseFriend: Boolean
++)
++
+ @Serializable
+ data class PrivacySettingsUpdateRequest(
+     val isPrivate: Boolean = false,
+diff --git a/backend/src/main/kotlin/profile/api/rest/SocialRoutes.kt b/backend/src/main/kotlin/profile/api/rest/SocialRoutes.kt
+--- a/backend/src/main/kotlin/profile/api/rest/SocialRoutes.kt
++++ b/backend/src/main/kotlin/profile/api/rest/SocialRoutes.kt
+@@ -145,4 +145,27 @@ fun Route.socialRoutes(
+             call.respond(SuccessResponse())
+         }
+     }
++
++    route("/api/internal") {
++        get("/visibility") {
++            val uid = requireUserId(call)
++            val ownerId = UUID.fromString(call.request.queryParameters["ownerId"] ?: error("ownerId is required"))
++            val viewerId = call.request.queryParameters["viewerId"]
++                ?.takeIf(String::isNotBlank)
++                ?.let(UUID::fromString)
++                ?: uid
++            require(viewerId == uid) { "viewerId must match authenticated user" }
++            val relationship = socialUseCases.getRelationship(viewerId, ownerId)
++            val privacy = socialUseCases.getPrivacySettings(ownerId)
++            val isCloseFriend = socialUseCases.getCloseFriends(ownerId).any { it.subscribedToId == viewerId }
++            call.respond(InternalVisibilityResponse(
++                ownerId = ownerId.toString(),
++                viewerId = viewerId.toString(),
++                isPrivate = privacy.isPrivate,
++                relationship = relationship.toResponse(),
++                isBlocked = relationship.isBlocked,
++                isCloseFriend = isCloseFriend
++            ))
++        }
++    }
+ }

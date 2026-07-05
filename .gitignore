@@ -5,10 +5,13 @@ frontend/node_modules/
 frontend/dist/
 frontend/*.tsbuildinfo
 
-# Backend / Gradle
-backend/build/
-backend/.gradle/
-backend/.kotlin/
+# Kotlin / Gradle
+profile-service/build/
+profile-service/.gradle/
+profile-service/.kotlin/
+content-service/build/
+content-service/.gradle/
+content-service/.kotlin/
 
 # Local development
 dev/.env

@@ -1,5 +1,5 @@
 window.__PROFILE_CONFIG__ = {
   apiBaseUrl: "/api",
   frontendBasePath: "/",
-  accountFrontendUrl: "http://localhost:5174"
+  accountFrontendUrl: "http://profile.localhost:8088/account"
 };
