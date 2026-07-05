@@ -4,6 +4,7 @@ import { useRouter } from "vue-router";
 import { useToast } from "primevue/usetoast";
 import { ContentService } from "@/api/contentService";
 import type { CanvasPostNode, ContentBlock, FeedItem } from "@/api/types";
+import { postSnippet, stripMediaReferences } from "@/features/display/displayText";
 import { buildFeedCanvasNodes, initialCanvasScroll } from "@/features/content/feedCanvasLayout";
 import StoryRail from "@/features/stories/StoryRail.vue";
 
@@ -88,7 +89,7 @@ function mediaPreview(node: CanvasPostNode): string {
 
 function nodeText(node: CanvasPostNode): string {
   const text = node.item.post.text || ContentService.textFromBlocks(node.item.post.blocks);
-  return text || "Media post";
+  return stripMediaReferences(text || postSnippet(node.item.post, "Media post"));
 }
 </script>
 
@@ -119,7 +120,7 @@ function nodeText(node: CanvasPostNode): string {
           </span>
           <span class="post-copy">
             <span class="post-kicker">{{ node.item.reasons.slice(0, 2).join(" / ") || "recommended" }}</span>
-            <strong>{{ node.item.post.title || "Untitled post" }}</strong>
+            <strong>{{ postSnippet(node.item.post, "Post") }}</strong>
             <span>{{ nodeText(node) }}</span>
           </span>
           <span class="post-meta">

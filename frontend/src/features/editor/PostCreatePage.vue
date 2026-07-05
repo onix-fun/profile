@@ -188,7 +188,7 @@ onBeforeUnmount(() => {
             <img v-if="attachment.type === 'IMAGE'" :src="attachment.url" alt="" />
             <video v-else-if="attachment.type === 'VIDEO'" :src="attachment.url" muted playsinline controls />
             <audio v-else :src="attachment.url" controls />
-            <code>{{ attachmentMarkdown(attachment) }}</code>
+            <code>{{ attachment.file.name }}</code>
             <button type="button" aria-label="Remove attachment" @click="removeAttachment(attachment.id)">
               <i class="pi pi-times"></i>
             </button>

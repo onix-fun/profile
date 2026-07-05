@@ -20,12 +20,15 @@ const mediaRecorder = ref<MediaRecorder | null>(null);
 const recordedChunks = ref<Blob[]>([]);
 const mediaFile = ref<File | null>(null);
 const mediaUrl = ref("");
+const mediaDurationMs = ref<number | null>(null);
 const permissionError = ref("");
 const videoPreview = ref<HTMLVideoElement | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
 const holdTimer = ref<number | null>(null);
+const recordingLimitTimer = ref<number | null>(null);
 const holdStartedRecording = ref(false);
 const holdThresholdMs = 260;
+const maxStoryVideoMs = 60_000;
 
 const isRecording = computed(() => state.value.status === "recording");
 const isEditing = computed(() => state.value.status === "edit" || state.value.status === "publishing");
@@ -89,12 +92,15 @@ function startRecording() {
     if (event.data.size > 0) recordedChunks.value.push(event.data);
   };
   recorder.onstop = () => {
+    clearRecordingLimitTimer();
     const blob = new Blob(recordedChunks.value, { type: recorder.mimeType || "video/webm" });
-    setStoryFile(new File([blob], `story-${Date.now()}.webm`, { type: blob.type || "video/webm" }));
+    void setStoryFile(new File([blob], `story-${Date.now()}.webm`, { type: blob.type || "video/webm" }), maxStoryVideoMs);
     setState({ type: "STOP_RECORDING", mediaReady: true });
   };
   mediaRecorder.value = recorder;
   recorder.start();
+  clearRecordingLimitTimer();
+  recordingLimitTimer.value = window.setTimeout(() => stopRecording(), maxStoryVideoMs);
   setState({ type: "START_RECORDING" });
 }
 
@@ -107,6 +113,13 @@ function clearHoldTimer() {
   if (holdTimer.value !== null) {
     window.clearTimeout(holdTimer.value);
     holdTimer.value = null;
+  }
+}
+
+function clearRecordingLimitTimer() {
+  if (recordingLimitTimer.value !== null) {
+    window.clearTimeout(recordingLimitTimer.value);
+    recordingLimitTimer.value = null;
   }
 }
 
@@ -124,7 +137,7 @@ function capturePhoto() {
   context.drawImage(video, 0, 0, canvas.width, canvas.height);
   canvas.toBlob((blob) => {
     if (!blob) return;
-    setStoryFile(new File([blob], `story-${Date.now()}.jpg`, { type: "image/jpeg" }));
+    void setStoryFile(new File([blob], `story-${Date.now()}.jpg`, { type: "image/jpeg" }));
   }, "image/jpeg", 0.92);
 }
 
@@ -154,9 +167,10 @@ function onRecordPointerUp(event: PointerEvent) {
   holdStartedRecording.value = false;
 }
 
-function setStoryFile(file: File) {
+async function setStoryFile(file: File, knownDurationMs: number | null = null) {
   revokeMediaUrl();
   mediaFile.value = file;
+  mediaDurationMs.value = knownDurationMs ?? await readMediaDurationMs(file);
   mediaUrl.value = URL.createObjectURL(file);
   setState({ type: "SELECT_FILE" });
 }
@@ -164,7 +178,7 @@ function setStoryFile(file: File) {
 function onFileInput(event: Event) {
   const input = event.target as HTMLInputElement;
   const file = input.files?.[0];
-  if (file) setStoryFile(file);
+  if (file) void setStoryFile(file);
   input.value = "";
 }
 
@@ -172,6 +186,46 @@ function mediaType(file: File): StoryBlock["type"] {
   if (file.type.startsWith("video/")) return "VIDEO";
   if (file.type.startsWith("audio/")) return "AUDIO";
   return "IMAGE";
+}
+
+function storyDurationMetadata(file: File): Record<string, number> {
+  if (!file.type.startsWith("video/") && !file.type.startsWith("audio/")) return {};
+  const mediaDuration = mediaDurationMs.value ?? maxStoryVideoMs;
+  const duration = Math.min(mediaDuration, maxStoryVideoMs);
+  return {
+    mediaDurationMs: Math.round(mediaDuration),
+    durationMs: Math.round(duration),
+    trimStartMs: 0,
+    trimEndMs: Math.round(duration),
+  };
+}
+
+function readMediaDurationMs(file: File): Promise<number | null> {
+  if (!file.type.startsWith("video/") && !file.type.startsWith("audio/")) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const element = document.createElement(file.type.startsWith("video/") ? "video" : "audio");
+    const url = URL.createObjectURL(file);
+    const cleanup = () => URL.revokeObjectURL(url);
+    element.preload = "metadata";
+    element.onloadedmetadata = () => {
+      const seconds = Number.isFinite(element.duration) ? element.duration : 0;
+      cleanup();
+      resolve(seconds > 0 ? seconds * 1000 : null);
+    };
+    element.onerror = () => {
+      cleanup();
+      resolve(null);
+    };
+    element.src = url;
+  });
+}
+
+function onPreviewTimeUpdate(event: Event) {
+  const element = event.target as HTMLVideoElement | HTMLAudioElement;
+  if (element.currentTime * 1000 >= maxStoryVideoMs) {
+    element.currentTime = 0;
+    void element.play().catch(() => undefined);
+  }
 }
 
 async function publish() {
@@ -190,6 +244,7 @@ async function publish() {
         size: mediaFile.value.size,
         caption: state.value.caption.trim(),
         tags: storyTags.value,
+        ...storyDurationMetadata(mediaFile.value),
       },
     };
     const story = await ContentService.createStory(
@@ -207,7 +262,7 @@ async function publish() {
       [mediaFile.value],
     );
     toast.add({ severity: "success", summary: "Story published", life: 2500 });
-    await router.push(`/story/${story.id}`);
+    await router.push({ path: `/story/${story.id}`, query: { author: story.authorId } });
   } catch (error) {
     toast.add({ severity: "error", summary: "Story", detail: error instanceof Error ? error.message : "Unable to publish story", life: 5000 });
     setState({ type: "EDIT" });
@@ -220,6 +275,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   clearHoldTimer();
+  clearRecordingLimitTimer();
   mediaRecorder.value?.state === "recording" && mediaRecorder.value.stop();
   stopStream();
   revokeMediaUrl();
@@ -272,8 +328,8 @@ onBeforeUnmount(() => {
     <main v-else class="edit-stage">
       <section class="phone-preview">
         <img v-if="mediaFile?.type.startsWith('image/')" :src="mediaUrl" alt="" />
-        <video v-else-if="mediaFile?.type.startsWith('video/')" :src="mediaUrl" autoplay loop muted playsinline controls />
-        <audio v-else :src="mediaUrl" controls />
+        <video v-else-if="mediaFile?.type.startsWith('video/')" :src="mediaUrl" autoplay loop muted playsinline controls @timeupdate="onPreviewTimeUpdate" />
+        <audio v-else :src="mediaUrl" controls @timeupdate="onPreviewTimeUpdate" />
         <div v-if="state.caption.trim()" class="caption-peek">
           {{ state.caption.trim() }}
         </div>

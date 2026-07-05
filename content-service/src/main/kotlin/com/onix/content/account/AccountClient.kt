@@ -1,6 +1,7 @@
 package com.onix.content.account
 
 import com.onix.content.domain.AccountVisibility
+import com.onix.content.domain.AccountUser
 import com.onix.content.domain.SessionUser
 import kotlinx.serialization.json.Json
 import java.net.URI
@@ -18,6 +19,15 @@ class AccountClient(private val apiBaseUrl: String) {
         val response = request("GET", "/users/me", accessToken)
         if (response.statusCode() == 401) throw AccountUnauthorized()
         if (response.statusCode() !in 200..299) throw AccountUnavailable("Account /users/me returned ${response.statusCode()}")
+        return json.decodeFromString(response.body())
+    }
+
+    fun getUser(userId: String, accessToken: String): AccountUser? {
+        val encoded = URLEncoder.encode(userId, StandardCharsets.UTF_8)
+        val response = request("GET", "/users/$encoded", accessToken)
+        if (response.statusCode() == 401) throw AccountUnauthorized()
+        if (response.statusCode() == 404) return null
+        if (response.statusCode() !in 200..299) throw AccountUnavailable("Account /users/{id} returned ${response.statusCode()}")
         return json.decodeFromString(response.body())
     }
 

@@ -13,6 +13,7 @@ function response(nodes: ProfileCanvasResponse["nodes"], owner = false): Profile
       { id: "avatar-bio", source: "avatar", target: "bio" },
       { id: "avatar-private", source: "avatar", target: "private" },
     ],
+    content: { posts: [], stories: [], comments: [] },
     permissions: { owner, canFollow: false },
     viewport: { x: 0, y: 0, zoom: 1 },
   };
@@ -34,7 +35,7 @@ describe("profile canvas layout", () => {
 
   it("uses deterministic orbit positions for automatic layout", () => {
     expect(ORBIT_OFFSETS.avatar).toEqual({ x: 0, y: 0 });
-    expect(ORBIT_OFFSETS.followAction).toEqual({ x: 0, y: 180 });
+    expect(ORBIT_OFFSETS.followAction).toEqual({ x: 0, y: 142 });
     expect(ORBIT_OFFSETS.posts).toEqual({ x: 360, y: -190 });
   });
 
@@ -52,17 +53,57 @@ describe("profile canvas layout", () => {
     expect(layout.initialScrollLeft).toBeGreaterThan(0);
     expect(layout.initialScrollLeft).toBeLessThanOrEqual(layout.stage.width - 640);
     expect(avatar?.center.x).toBe(layout.avatarCenter.x);
-    expect(bio?.center.x).toBeGreaterThan(layout.avatarCenter.x);
+    expect(bio?.center.y).toBeGreaterThan(layout.avatarCenter.y);
   });
 
-  it("adds settings as a synthetic owner branch", () => {
+  it("does not add settings as a synthetic canvas branch", () => {
     const layout = buildProfileCanvasLayout(response([
       { id: "avatar", type: "avatar", position: { x: 0, y: 0 }, data: {} },
       { id: "displayName", type: "label", position: { x: 0, y: 0 }, data: { label: "Alice" } },
     ], true), { width: 900, height: 620 });
 
-    expect(layout.nodes.map((node) => node.id)).toContain("settingsAction");
-    expect(layout.edges.map((edge) => edge.id)).toContain("avatar-settingsAction");
+    expect(layout.nodes.map((node) => node.id)).not.toContain("settingsAction");
+    expect(layout.edges.map((edge) => edge.id)).not.toContain("avatar-settingsAction");
+  });
+
+  it("places profile posts as right-side canvas branches without overlap", () => {
+    const layout = buildProfileCanvasLayout({
+      ...response([
+        { id: "avatar", type: "avatar", position: { x: 0, y: 0 }, data: {} },
+        { id: "posts", type: "stat", position: { x: 0, y: 0 }, data: { label: "2" } },
+      ]),
+      content: {
+        posts: [
+          { id: "post-new", text: "New post", tags: [], createdAt: "2026-07-05T00:00:00Z" },
+          { id: "post-old", text: "Old post", tags: [], createdAt: "2026-07-01T00:00:00Z" },
+        ],
+        stories: [],
+        comments: [],
+      },
+    }, { width: 900, height: 620 });
+
+    const postNodes = layout.nodes.filter((node) => node.type === "post");
+    const avatar = layout.nodes.find((node) => node.id === "avatar");
+
+    expect(layout.nodes.map((node) => node.id)).not.toContain("posts");
+    expect(postNodes).toHaveLength(2);
+    expect(postNodes.every((node) => avatar && node.center.x > avatar.center.x)).toBe(true);
+    expect(layout.edges.filter((edge) => edge.target.startsWith("post:"))).toHaveLength(2);
+  });
+
+  it("adds archive as an upper-left avatar branch when archived stories exist", () => {
+    const layout = buildProfileCanvasLayout(response([
+      { id: "avatar", type: "avatar", position: { x: 0, y: 0 }, data: {} },
+      { id: "displayName", type: "label", position: { x: 0, y: 0 }, data: { label: "Alice" } },
+    ]), { width: 900, height: 620 }, { hasArchive: true, archiveCount: 3 });
+
+    const archive = layout.nodes.find((node) => node.id === "archive");
+    const avatar = layout.nodes.find((node) => node.id === "avatar");
+
+    expect(archive?.type).toBe("archive");
+    expect(archive?.data.label).toBe("3");
+    expect(avatar && archive && archive.center.x < avatar.center.x && archive.center.y < avatar.center.y).toBe(true);
+    expect(layout.edges.map((edge) => edge.id)).toContain("avatar-archive");
   });
 });
 

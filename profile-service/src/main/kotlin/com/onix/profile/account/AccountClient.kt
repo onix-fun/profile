@@ -1,6 +1,7 @@
 package com.onix.profile.account
 
 import com.onix.profile.domain.AccountProfile
+import com.onix.profile.domain.AccountSearchUser
 import com.onix.profile.domain.Relationship
 import com.onix.profile.domain.SessionUser
 import kotlinx.serialization.Serializable
@@ -50,6 +51,17 @@ class AccountClient(private val apiBaseUrl: String) {
         if (response.statusCode() == 403) throw AccountForbidden()
         if (response.statusCode() == 404) throw AccountNotFound()
         if (response.statusCode() !in 200..299) throw AccountUnavailable("Account unfollow returned ${response.statusCode()}")
+    }
+
+    fun searchUsers(query: String, limit: Int, accessToken: String): List<AccountSearchUser> {
+        if (query.isBlank()) return emptyList()
+        val encodedQuery = URLEncoder.encode(query.trim(), StandardCharsets.UTF_8)
+        val cappedLimit = limit.coerceIn(1, 50)
+        val response = request("GET", "/search/search?q=$encodedQuery&limit=$cappedLimit", accessToken)
+        if (response.statusCode() == 401) throw AccountUnauthorized()
+        if (response.statusCode() == 403) throw AccountForbidden()
+        if (response.statusCode() !in 200..299) throw AccountUnavailable("Account profile search returned ${response.statusCode()}")
+        return json.decodeFromString(response.body())
     }
 
     private fun request(method: String, path: String, accessToken: String): HttpResponse<String> {

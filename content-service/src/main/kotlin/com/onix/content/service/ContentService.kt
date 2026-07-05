@@ -2,6 +2,10 @@ package com.onix.content.service
 
 import com.onix.content.domain.*
 import com.onix.content.search.SearchEventPublisher
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.longOrNull
 import java.time.Clock
 import java.time.Instant
 import java.util.UUID
@@ -37,12 +41,19 @@ class ContentService(
     fun createStory(author: SessionUser, input: CreateStoryInput): Story {
         require(input.blocks.isNotEmpty()) { "Story must contain at least one block" }
         val now = Instant.now(clock)
+        val blocks = input.blocks.map(::normalizeStoryBlock)
         return repository.saveStory(
             Story(
                 id = UUID.randomUUID().toString(),
                 authorId = author.id,
-                blocks = input.blocks,
+                author = author.asAccountUser(),
+                blocks = blocks,
                 visibility = input.visibility,
+                durationMs = storyDurationMs(blocks),
+                mediaDurationMs = storyMediaDurationMs(blocks),
+                closeFriends = input.visibility == Visibility.CLOSE_FRIENDS,
+                archived = false,
+                remainingLifeSeconds = 24 * 60 * 60,
                 createdAt = now,
                 expiresAt = now.plusSeconds(24 * 60 * 60)
             )
@@ -80,7 +91,8 @@ class ContentService(
         val posts = repository.listPostsByAuthor(ownerId, postLimit.coerceIn(1, 500))
             .map { withViewerState(it, visibility.viewerId) }
         val stories = repository.listActiveStoriesByAuthor(ownerId, now, storyLimit.coerceIn(1, 50))
-            .filter { canViewStory(it, visibility) }
+            .filter { canViewStory(it, visibility, includeArchived = false) }
+            .map { enrichStory(it, now = now, viewerId = visibility.viewerId) }
         val comments = posts.flatMap { repository.listCommentsForPost(it.id, 3) }
         return ProfileContentResponse(posts = posts, stories = stories, comments = comments)
     }
@@ -123,33 +135,124 @@ class ContentService(
         return PostReactionState(postId = postId, liked = false, likeCount = repository.countPostLikes(postId))
     }
 
-    fun story(id: String): Story? = repository.findStory(id)
+    fun likeStory(user: SessionUser, storyId: String): StoryReactionState {
+        repository.findStory(storyId) ?: throw IllegalArgumentException("Story not found")
+        repository.setStoryLike(storyId, user.id, true)
+        return StoryReactionState(storyId = storyId, liked = true, likeCount = repository.countStoryLikes(storyId))
+    }
+
+    fun unlikeStory(user: SessionUser, storyId: String): StoryReactionState {
+        repository.findStory(storyId) ?: throw IllegalArgumentException("Story not found")
+        repository.setStoryLike(storyId, user.id, false)
+        return StoryReactionState(storyId = storyId, liked = false, likeCount = repository.countStoryLikes(storyId))
+    }
+
+    fun story(id: String, viewerId: String? = null): Story? =
+        repository.findStory(id)?.let { enrichStory(it, now = Instant.now(clock), viewerId = viewerId) }
 
     fun comments(postId: String, limit: Int): List<Comment> =
         repository.listCommentsForPost(postId, limit.coerceIn(1, 100))
 
-    fun storiesFeed(viewerId: String, limit: Int): List<StoryRailItem> {
+    fun storiesFeed(
+        viewerId: String,
+        limit: Int,
+        authorResolver: (String) -> AccountUser? = { null },
+        visibilityResolver: (String) -> AccountVisibility = { ownerId -> AccountVisibility(ownerId = ownerId, viewerId = viewerId) }
+    ): List<StoryRailItem> {
         val now = Instant.now(clock)
         return repository.listActiveStories(now, limit.coerceIn(1, 100))
+            .filter { story -> canViewStory(story, visibilityResolver(story.authorId), includeArchived = false) }
             .groupBy { it.authorId }
             .values
             .map { stories ->
                 val latest = stories.maxBy { it.createdAt }
+                val oldest = stories.minBy { it.createdAt }
+                val author = authorResolver(latest.authorId)
                 StoryRailItem(
                     authorId = latest.authorId,
-                    authorName = if (latest.authorId == viewerId) "You" else "@${latest.authorId.take(8)}",
-                    storyIds = stories.sortedByDescending { it.createdAt }.map { it.id },
+                    authorName = author?.username ?: if (latest.authorId == viewerId) "You" else "User",
+                    author = author,
+                    avatarUrl = author?.avatarUrl,
+                    storyIds = stories.sortedBy { it.createdAt }.map { it.id },
                     activeCount = stories.size,
+                    seen = stories.all { repository.isStoryViewed(it.id, viewerId) },
                     closeFriends = stories.any { it.visibility == Visibility.CLOSE_FRIENDS },
+                    isViewer = latest.authorId == viewerId,
+                    oldestAt = oldest.createdAt,
                     latestAt = latest.createdAt
                 )
             }
-            .sortedByDescending { it.latestAt }
+            .sortedWith(compareByDescending<StoryRailItem> { it.isViewer }.thenByDescending { it.latestAt })
             .take(limit.coerceIn(1, 100))
     }
 
-    private fun canViewStory(story: Story, visibility: AccountVisibility): Boolean {
+    fun storyGroup(
+        viewerId: String,
+        authorId: String,
+        startStoryId: String?,
+        authorResolver: (String) -> AccountUser? = { null },
+        visibilityResolver: (String) -> AccountVisibility = { ownerId -> AccountVisibility(ownerId = ownerId, viewerId = viewerId) },
+        archive: Boolean = false
+    ): StoryGroup {
+        val now = Instant.now(clock)
+        val visibility = visibilityResolver(authorId)
+        val rawStories = if (archive) {
+            repository.listArchivedStoriesByAuthor(authorId, now, 100)
+        } else {
+            repository.listActiveStoriesByAuthor(authorId, now, 100)
+        }
+        val author = authorResolver(authorId)
+        val stories = rawStories
+            .filter { canViewStory(it, visibility, includeArchived = archive) }
+            .sortedBy { it.createdAt }
+            .map { enrichStory(it, author, now, viewerId) }
+        return StoryGroup(
+            authorId = authorId,
+            authorName = author?.username ?: if (authorId == viewerId) "You" else "User",
+            author = author,
+            avatarUrl = author?.avatarUrl,
+            stories = stories,
+            startStoryId = startStoryId?.takeIf { id -> stories.any { it.id == id } } ?: stories.firstOrNull()?.id,
+            archive = archive
+        )
+    }
+
+    fun storyArchive(
+        ownerId: String,
+        visibility: AccountVisibility,
+        author: AccountUser?,
+        limit: Int,
+        cursor: Instant? = null
+    ): StoryArchiveResponse {
+        val now = Instant.now(clock)
+        if (visibility.isBlocked || !visibility.canSeePrivateContent) {
+            return StoryArchiveResponse(ownerId = ownerId, owner = author)
+        }
+        val pageLimit = limit.coerceIn(1, 80)
+        val stories = repository.listArchivedStoriesByAuthor(ownerId, now, pageLimit + 1, cursor)
+            .filter { canViewStory(it, visibility, includeArchived = true) }
+            .map { enrichStory(it, author, now, visibility.viewerId) }
+        val page = stories.take(pageLimit)
+        return StoryArchiveResponse(
+            ownerId = ownerId,
+            owner = author,
+            stories = page,
+            cursor = cursor?.toString(),
+            nextCursor = stories.getOrNull(pageLimit)?.createdAt?.toString()
+        )
+    }
+
+    fun recordStoryView(user: SessionUser, storyId: String): Boolean {
+        repository.findStory(storyId) ?: throw IllegalArgumentException("Story not found")
+        repository.recordStoryView(storyId, user.id, Instant.now(clock))
+        return true
+    }
+
+    private fun canViewStory(story: Story, visibility: AccountVisibility, includeArchived: Boolean): Boolean {
         if (visibility.isBlocked) return false
+        if (!includeArchived && !story.expiresAt.isAfter(Instant.now(clock))) return false
+        if (includeArchived && story.expiresAt.isAfter(Instant.now(clock)) && story.status != ContentStatus.ARCHIVED) return false
+        if (story.status == ContentStatus.DELETED) return false
         if (story.authorId == visibility.viewerId) return true
         if (visibility.ownerId != story.authorId) return false
         return when (story.visibility) {
@@ -158,9 +261,66 @@ class ContentService(
         }
     }
 
+    private fun enrichStory(story: Story, author: AccountUser? = story.author, now: Instant, viewerId: String? = null): Story =
+        story.copy(
+            author = author,
+            durationMs = storyDurationMs(story.blocks),
+            mediaDurationMs = storyMediaDurationMs(story.blocks),
+            closeFriends = story.visibility == Visibility.CLOSE_FRIENDS,
+            archived = story.status == ContentStatus.ARCHIVED || !story.expiresAt.isAfter(now),
+            likeCount = repository.countStoryLikes(story.id),
+            likedByViewer = viewerId?.let { repository.isStoryLikedBy(story.id, it) } ?: false,
+            remainingLifeSeconds = if (story.expiresAt.isAfter(now)) java.time.Duration.between(now, story.expiresAt).seconds else 0
+        )
+
+    private fun normalizeStoryBlock(block: ContentBlock): ContentBlock {
+        if (block.type != ContentBlockType.VIDEO && block.type != ContentBlockType.AUDIO) return block
+        val mediaDuration = block.data.longValue("mediaDurationMs") ?: block.data.longValue("durationMs")
+        val cappedDuration = (mediaDuration ?: STORY_VIDEO_MAX_MS).coerceAtMost(STORY_VIDEO_MAX_MS).coerceAtLeast(1_000)
+        return block.copy(data = JsonObject(block.data + mapOf(
+            "durationMs" to JsonPrimitive(cappedDuration),
+            "mediaDurationMs" to JsonPrimitive(mediaDuration ?: cappedDuration),
+            "trimStartMs" to JsonPrimitive(0),
+            "trimEndMs" to JsonPrimitive(cappedDuration)
+        )))
+    }
+
+    private fun storyDurationMs(blocks: List<ContentBlock>): Long =
+        blocks.firstNotNullOfOrNull { block ->
+            when (block.type) {
+                ContentBlockType.VIDEO, ContentBlockType.AUDIO ->
+                    (block.data.longValue("durationMs") ?: block.data.longValue("mediaDurationMs") ?: STORY_VIDEO_MAX_MS)
+                        .coerceAtMost(STORY_VIDEO_MAX_MS)
+                        .coerceAtLeast(1_000)
+                ContentBlockType.IMAGE -> STORY_IMAGE_DURATION_MS
+                ContentBlockType.TEXT -> null
+            }
+        } ?: STORY_IMAGE_DURATION_MS
+
+    private fun storyMediaDurationMs(blocks: List<ContentBlock>): Long? =
+        blocks.firstNotNullOfOrNull { block ->
+            if (block.type == ContentBlockType.VIDEO || block.type == ContentBlockType.AUDIO) {
+                block.data.longValue("mediaDurationMs") ?: block.data.longValue("durationMs")
+            } else {
+                null
+            }
+        }
+
+    private fun JsonObject.longValue(key: String): Long? =
+        (this[key] as? JsonPrimitive)?.longOrNull
+            ?: (this[key] as? JsonPrimitive)?.contentOrNull?.toLongOrNull()
+
+    private fun SessionUser.asAccountUser(): AccountUser =
+        AccountUser(id = id, username = username, firstName = firstName, lastName = lastName, avatarUrl = avatarUrl)
+
     private fun withViewerState(post: Post, viewerId: String?): Post =
         post.copy(
             likeCount = repository.countPostLikes(post.id),
             likedByViewer = viewerId?.let { repository.isPostLikedBy(post.id, it) } ?: false
         )
+
+    companion object {
+        const val STORY_VIDEO_MAX_MS = 60_000L
+        const val STORY_IMAGE_DURATION_MS = 5_000L
+    }
 }

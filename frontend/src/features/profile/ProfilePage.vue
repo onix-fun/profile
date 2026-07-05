@@ -6,8 +6,7 @@ import { apiErrorMessage } from "@/api/client";
 import { ContentService } from "@/api/contentService";
 import { ProfileService } from "@/api/profileService";
 import type { AccountProfile, ContentBlock, ProfileCanvasResponse, ProfileContentPost, SessionUser } from "@/api/types";
-import { runtimeConfig } from "@/runtime-config";
-import { accountSettingsUrl } from "@/features/profile/accountLinks";
+import { postSnippet, stripMediaReferences } from "@/features/display/displayText";
 import {
   buildProfileCanvasLayout,
   type PositionedProfileCanvasNode,
@@ -22,6 +21,7 @@ const isLoading = ref(true);
 const errorCode = ref<string | null>(null);
 const currentUser = ref<SessionUser | null>(null);
 const response = ref<ProfileCanvasResponse | null>(null);
+const archiveCount = ref(0);
 const profile = computed<AccountProfile | null>(() => response.value?.profile || null);
 const canvasViewport = ref<HTMLElement | null>(null);
 const canvasElement = ref<HTMLCanvasElement | null>(null);
@@ -33,7 +33,6 @@ let drawFrame = 0;
 const nickname = computed(() => String(route.params.nickname || ""));
 const isBlocked = computed(() => response.value?.status === "BLOCKED");
 const canFollow = computed(() => Boolean(response.value?.permissions.canFollow));
-const accountSettingsHref = computed(() => accountSettingsUrl(runtimeConfig.accountFrontendUrl, window.location.href));
 const relationship = computed(() => profile.value?.relationship || response.value?.relationship || null);
 const followLabel = computed(() => {
   const rel = relationship.value;
@@ -48,7 +47,10 @@ const followIcon = computed(() => {
   return "pi pi-user-plus";
 });
 const canvasLayout = computed(() => (
-  response.value ? buildProfileCanvasLayout(response.value, viewportSize.value) : null
+  response.value ? buildProfileCanvasLayout(response.value, viewportSize.value, {
+    hasArchive: archiveCount.value > 0,
+    archiveCount: archiveCount.value,
+  }) : null
 ));
 const canvasNodes = computed(() => canvasLayout.value?.nodes || []);
 const profilePosts = computed(() => response.value?.content?.posts || []);
@@ -105,6 +107,7 @@ async function loadProfile() {
     }
 
     response.value = await ProfileService.getProfile(nickname.value);
+    await loadArchiveStatus();
   } catch (cause: unknown) {
     const status = (cause as { response?: { status?: number } }).response?.status;
     errorCode.value = status === 404 ? "NOT_FOUND" : status === 403 ? "FORBIDDEN" : "FAILED";
@@ -115,6 +118,13 @@ async function loadProfile() {
     scheduleCanvasDraw();
     centerCanvas();
   }
+}
+
+async function loadArchiveStatus() {
+  archiveCount.value = 0;
+  if (!response.value?.profile?.id) return;
+  const archive = await ContentService.storyArchive(response.value.profile.id, null, 12);
+  archiveCount.value = archive.stories.length;
 }
 
 async function toggleFollow() {
@@ -163,8 +173,17 @@ function nodeAvatarUrl(node: PositionedProfileCanvasNode): string {
   return String(node.data.avatarUrl ?? "");
 }
 
+function nodePost(node: PositionedProfileCanvasNode): ProfileContentPost | undefined {
+  const postId = String(node.data.postId || "");
+  return profilePosts.value.find((post) => post.id === postId);
+}
+
 function openPost(post: ProfileContentPost) {
   void router.push(`/p/${encodeURIComponent(post.id)}`);
+}
+
+function openArchive() {
+  void router.push(`/u/${encodeURIComponent(nickname.value)}/stories/archive`);
 }
 
 function postBlocks(post: ProfileContentPost): ContentBlock[] {
@@ -185,7 +204,11 @@ function postMediaType(post: ProfileContentPost): string {
 }
 
 function postText(post: ProfileContentPost): string {
-  return post.text || ContentService.textFromBlocks(postBlocks(post)) || "Media post";
+  return stripMediaReferences(post.text || ContentService.textFromBlocks(postBlocks(post)) || "Media post");
+}
+
+function postTitle(post: ProfileContentPost): string {
+  return postSnippet(post);
 }
 
 async function togglePostLike(post: ProfileContentPost) {
@@ -374,59 +397,52 @@ function drawCanvas() {
                 <span>{{ followLabel }}</span>
               </button>
 
-              <a
-                v-else-if="node.id === 'settingsAction'"
-                class="canvas-node node node-action node-settings-action"
+              <button
+                v-else-if="node.id === 'archive'"
+                class="canvas-node node node-archive"
+                type="button"
                 :style="nodeStyle(node)"
-                :href="accountSettingsHref"
-                aria-label="Open account settings"
-                title="Settings"
+                @click="openArchive"
               >
-                <i class="pi pi-cog"></i>
-                <span>Settings</span>
-              </a>
+                <i class="pi pi-history"></i>
+                <strong>{{ nodeLabel(node) }}</strong>
+                <span>{{ nodeCaption(node) }}</span>
+              </button>
+
+              <button
+                v-else-if="node.type === 'post' && nodePost(node)"
+                class="canvas-node node node-post"
+                type="button"
+                :style="nodeStyle(node)"
+                @click="openPost(nodePost(node)!)"
+              >
+                <span v-if="postMediaType(nodePost(node)!) !== 'TEXT'" class="node-post-media">
+                  <img
+                    v-if="postMediaType(nodePost(node)!) === 'IMAGE' && postMediaSource(nodePost(node)!)"
+                    :src="postMediaSource(nodePost(node)!)"
+                    alt=""
+                  />
+                  <video
+                    v-else-if="postMediaType(nodePost(node)!) === 'VIDEO' && postMediaSource(nodePost(node)!)"
+                    :src="postMediaSource(nodePost(node)!)"
+                    muted
+                    playsinline
+                  />
+                  <i v-else :class="postMediaType(nodePost(node)!) === 'AUDIO' ? 'pi pi-volume-up' : 'pi pi-image'"></i>
+                </span>
+                <span class="node-post-copy">
+                  <strong>{{ postTitle(nodePost(node)!) }}</strong>
+                  <span>{{ postText(nodePost(node)!) }}</span>
+                </span>
+                <span class="node-post-meta">
+                  <small v-for="tag in nodePost(node)!.tags.slice(0, 2)" :key="tag">#{{ tag }}</small>
+                  <small><i :class="nodePost(node)!.likedByViewer ? 'pi pi-heart-fill' : 'pi pi-heart'"></i>{{ nodePost(node)!.likeCount || 0 }}</small>
+                </span>
+              </button>
             </template>
           </div>
         </div>
       </div>
-
-      <aside class="profile-posts-panel" aria-label="Profile posts">
-        <header>
-          <span>Posts</span>
-          <strong>{{ profilePosts.length }}</strong>
-        </header>
-        <div v-if="profilePosts.length" class="profile-posts-list">
-          <article v-for="post in profilePosts" :key="post.id" class="profile-post">
-            <button type="button" class="profile-post-open" @click="openPost(post)">
-              <span v-if="postMediaType(post) !== 'TEXT'" class="profile-post-media">
-                <img v-if="postMediaType(post) === 'IMAGE' && postMediaSource(post)" :src="postMediaSource(post)" alt="" />
-                <video v-else-if="postMediaType(post) === 'VIDEO' && postMediaSource(post)" :src="postMediaSource(post)" muted playsinline />
-                <i v-else :class="postMediaType(post) === 'AUDIO' ? 'pi pi-volume-up' : 'pi pi-image'"></i>
-              </span>
-              <span class="profile-post-copy">
-                <strong>{{ post.title || "Post" }}</strong>
-                <span>{{ postText(post) }}</span>
-              </span>
-            </button>
-            <footer>
-              <span class="profile-post-tags">
-                <small v-for="tag in post.tags.slice(0, 3)" :key="tag">#{{ tag }}</small>
-              </span>
-              <button
-                type="button"
-                class="profile-post-like"
-                :class="{ active: post.likedByViewer }"
-                :aria-label="post.likedByViewer ? 'Unlike post' : 'Like post'"
-                @click="togglePostLike(post)"
-              >
-                <i :class="post.likedByViewer ? 'pi pi-heart-fill' : 'pi pi-heart'"></i>
-                <span>{{ post.likeCount || 0 }}</span>
-              </button>
-            </footer>
-          </article>
-        </div>
-        <p v-else>No posts yet</p>
-      </aside>
     </section>
 
     <section v-else class="state-screen">
@@ -458,154 +474,6 @@ function drawCanvas() {
   overscroll-behavior-y: none;
   scrollbar-width: thin;
   touch-action: pan-x;
-}
-
-.profile-posts-panel {
-  position: fixed;
-  z-index: 8;
-  right: clamp(14px, 3vw, 34px);
-  top: 96px;
-  width: min(360px, calc(100vw - 28px));
-  max-height: calc(100dvh - 124px);
-  display: grid;
-  gap: 12px;
-  padding: 14px;
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.82);
-  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.14);
-  backdrop-filter: blur(18px);
-  overflow: hidden;
-}
-
-.profile-posts-panel > header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  color: #111827;
-  font-weight: 900;
-}
-
-.profile-posts-panel > header span,
-.profile-posts-panel > p {
-  color: #64748b;
-  font-size: 12px;
-  font-weight: 900;
-  text-transform: uppercase;
-}
-
-.profile-posts-panel > p {
-  margin: 0;
-  padding: 18px 4px 8px;
-  text-align: center;
-}
-
-.profile-posts-list {
-  display: grid;
-  gap: 10px;
-  overflow: auto;
-  padding-right: 2px;
-}
-
-.profile-post {
-  display: grid;
-  gap: 9px;
-  border: 1px solid rgba(15, 23, 42, 0.07);
-  border-radius: 10px;
-  padding: 9px;
-  background: rgba(255, 255, 255, 0.88);
-}
-
-.profile-post-open {
-  display: grid;
-  gap: 8px;
-  min-width: 0;
-  border: 0;
-  padding: 0;
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.profile-post-media {
-  height: 156px;
-  display: grid;
-  place-items: center;
-  overflow: hidden;
-  border-radius: 8px;
-  background: #111827;
-  color: #ffffff;
-}
-
-.profile-post-media img,
-.profile-post-media video {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.profile-post-copy {
-  display: grid;
-  gap: 4px;
-}
-
-.profile-post-copy strong {
-  color: #111827;
-  font-size: 15px;
-  line-height: 1.2;
-}
-
-.profile-post-copy span {
-  display: -webkit-box;
-  overflow: hidden;
-  color: #475569;
-  font-size: 13px;
-  font-weight: 650;
-  line-height: 1.35;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-}
-
-.profile-post footer {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.profile-post-tags {
-  min-width: 0;
-  flex: 1;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  color: #64748b;
-  font-size: 11px;
-  font-weight: 900;
-}
-
-.profile-post-like {
-  min-width: 54px;
-  height: 32px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  border: 1px solid #e2e8f0;
-  border-radius: 999px;
-  background: #ffffff;
-  color: #111827;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 900;
-  cursor: pointer;
-}
-
-.profile-post-like.active {
-  border-color: rgba(225, 29, 72, 0.24);
-  color: #e11d48;
-  background: #fff1f2;
 }
 
 .canvas-stage {
@@ -663,6 +531,7 @@ function drawCanvas() {
 .node-label,
 .node-text,
 .node-stat,
+.node-archive,
 .node-links,
 .node-action {
   border-radius: 12px;
@@ -708,6 +577,36 @@ function drawCanvas() {
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
+}
+
+.node-archive {
+  border: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  align-items: center;
+  padding: 12px 14px;
+  background: linear-gradient(135deg, rgba(17, 24, 39, 0.96), rgba(34, 197, 94, 0.82));
+  color: #ffffff;
+  text-align: left;
+  cursor: pointer;
+}
+
+.node-archive i {
+  grid-row: 1 / span 2;
+  font-size: 19px;
+}
+
+.node-archive strong {
+  font-size: 20px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.node-archive span {
+  color: rgba(255, 255, 255, 0.74);
+  font-size: 12px;
+  font-weight: 900;
 }
 
 .node-links {
@@ -758,6 +657,89 @@ function drawCanvas() {
 .node-action:disabled {
   cursor: default;
   opacity: 0.7;
+}
+
+.node-post {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: 8px;
+  border-radius: 12px;
+  padding: 9px;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 140ms ease, box-shadow 140ms ease;
+}
+
+.node-post:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 18px 42px rgba(22, 34, 51, 0.17);
+}
+
+.node-post-media {
+  height: 62px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #111827;
+  color: #ffffff;
+}
+
+.node-post-media img,
+.node-post-media video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.node-post-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.node-post-copy strong {
+  overflow: hidden;
+  color: #111827;
+  font-size: 14px;
+  line-height: 1.18;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-post-copy span {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.3;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.node-post-meta {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.node-post-meta small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-post-meta small:last-child {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
 }
 
 .state-screen {

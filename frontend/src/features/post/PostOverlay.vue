@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useToast } from "primevue/usetoast";
 import { ContentService } from "@/api/contentService";
+import { stripMediaReferences } from "@/features/display/displayText";
 import type { CommentItem, ContentBlock, FeedItem } from "@/api/types";
 
 const route = useRoute();
@@ -38,11 +39,15 @@ function close() {
 
 function blockText(block: ContentBlock): string {
   const value = block.data.text;
-  return typeof value === "string" ? value : "";
+  return typeof value === "string" ? stripMediaReferences(value) : "";
 }
 
 function blockSource(block: ContentBlock): string {
   return ContentService.mediaSource(block);
+}
+
+function postText(): string {
+  return stripMediaReferences(post.value?.text || "");
 }
 
 async function toggleLike() {
@@ -101,7 +106,7 @@ async function sendComment(parentId?: string) {
       <template v-else>
         <header class="post-header">
           <h1 v-if="post.title">{{ post.title }}</h1>
-          <p>{{ post.text }}</p>
+          <p>{{ postText() }}</p>
           <button
             type="button"
             class="like-button"

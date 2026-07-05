@@ -2,17 +2,25 @@
 import { onMounted, ref } from "vue";
 import { RouterLink, useRouter } from "vue-router";
 import { ContentService } from "@/api/contentService";
+import { ProfileService } from "@/api/profileService";
 import { mergeSeenState, sortStoryRail } from "@/features/stories/storyState";
-import type { StoryRailItem } from "@/api/types";
+import { displayStoryAuthor } from "@/features/display/displayText";
+import type { SessionUser, StoryRailItem } from "@/api/types";
 
 const router = useRouter();
 const stories = ref<StoryRailItem[]>([]);
+const currentUser = ref<SessionUser | null>(null);
 const isLoading = ref(false);
 
 onMounted(async () => {
   isLoading.value = true;
   try {
-    stories.value = sortStoryRail(mergeSeenState(await ContentService.storiesFeed()));
+    const [session, feed] = await Promise.all([
+      ProfileService.session(),
+      ContentService.storiesFeed(),
+    ]);
+    currentUser.value = session;
+    stories.value = sortStoryRail(mergeSeenState(feed));
   } finally {
     isLoading.value = false;
   }
@@ -20,22 +28,61 @@ onMounted(async () => {
 
 function openStory(item: StoryRailItem) {
   const firstStory = item.storyIds[0];
-  if (firstStory) void router.push(`/story/${encodeURIComponent(firstStory)}`);
+  if (firstStory) {
+    void router.push({
+      path: `/story/${encodeURIComponent(firstStory)}`,
+      query: { author: item.authorId },
+    });
+  }
+}
+
+function authorAvatar(item: StoryRailItem): string {
+  return item.author?.avatarUrl || item.avatarUrl || "";
+}
+
+function viewerItem(): StoryRailItem | null {
+  return stories.value.find((item) => item.isViewer || item.authorId === currentUser.value?.id) || null;
+}
+
+function otherItems(): StoryRailItem[] {
+  const viewer = viewerItem();
+  return stories.value.filter((item) => item !== viewer);
+}
+
+function viewerAvatar(): string {
+  const item = viewerItem();
+  return item ? authorAvatar(item) : currentUser.value?.avatarUrl || "";
 }
 </script>
 
 <template>
   <section class="story-rail" aria-label="Stories">
     <div class="story-track">
-      <RouterLink class="story-pill story-pill--create" to="/story/new" aria-label="Create story">
+      <button
+        v-if="viewerItem()"
+        type="button"
+        class="story-pill story-pill--viewer"
+        :class="{ 'story-pill--seen': viewerItem()?.seen, 'story-pill--close': viewerItem()?.closeFriends }"
+        @click="viewerItem() && openStory(viewerItem()!)"
+      >
         <span class="story-ring">
-          <i class="pi pi-plus"></i>
+          <img v-if="viewerAvatar()" :src="viewerAvatar()" alt="" />
+          <span v-else><i class="pi pi-user"></i></span>
         </span>
-        <strong>Create</strong>
+        <strong>{{ displayStoryAuthor(viewerItem()!) }}</strong>
+      </button>
+
+      <RouterLink v-else class="story-pill story-pill--create" to="/story/new" aria-label="Create story">
+        <span class="story-ring">
+          <img v-if="viewerAvatar()" :src="viewerAvatar()" alt="" />
+          <i v-else class="pi pi-plus"></i>
+          <small><i class="pi pi-plus"></i></small>
+        </span>
+        <strong>{{ currentUser?.username || "Create" }}</strong>
       </RouterLink>
 
       <button
-        v-for="item in stories"
+        v-for="item in otherItems()"
         :key="item.authorId"
         type="button"
         class="story-pill"
@@ -43,10 +90,10 @@ function openStory(item: StoryRailItem) {
         @click="openStory(item)"
       >
         <span class="story-ring">
-          <img v-if="item.avatarUrl" :src="item.avatarUrl" alt="" />
-          <span v-else>{{ item.authorName.slice(0, 1).toUpperCase() }}</span>
+          <img v-if="authorAvatar(item)" :src="authorAvatar(item)" alt="" />
+          <span v-else><i class="pi pi-user"></i></span>
         </span>
-        <strong>{{ item.authorName.replace(/^@/, "") }}</strong>
+        <strong>{{ displayStoryAuthor(item) }}</strong>
       </button>
 
       <span v-if="isLoading" class="story-loading">Loading stories</span>
@@ -120,7 +167,7 @@ function openStory(item: StoryRailItem) {
 
 .story-ring img,
 .story-ring > span,
-.story-ring i {
+.story-ring > i {
   width: 100%;
   height: 100%;
   display: grid;
@@ -145,20 +192,42 @@ function openStory(item: StoryRailItem) {
 }
 
 .story-pill--seen .story-ring {
-  background: #d7dde5;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
 }
 
 .story-pill--close .story-ring {
   background: conic-gradient(from 220deg, #22c55e, #86efac, #22c55e);
 }
 
+.story-pill--seen.story-pill--close .story-ring {
+  background: transparent;
+}
+
 .story-pill--create .story-ring {
+  position: relative;
   background: #111827;
 }
 
-.story-pill--create i {
+.story-pill--create .story-ring > i {
   background: #111827;
   color: #ffffff;
+}
+
+.story-pill--create small {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 2px solid #ffffff;
+  border-radius: 999px;
+  background: #111827;
+  color: #ffffff;
+  font-size: 10px;
 }
 
 .story-loading {

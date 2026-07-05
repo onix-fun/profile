@@ -48,6 +48,7 @@ export interface AccountProfile {
 export interface ProfileContentPost {
   id: string;
   authorId?: string | null;
+  authorName?: string | null;
   title?: string | null;
   text: string;
   blocks?: ContentBlock[];
@@ -120,6 +121,12 @@ export interface PostReactionState {
   likeCount: number;
 }
 
+export interface StoryReactionState {
+  storyId: string;
+  liked: boolean;
+  likeCount: number;
+}
+
 export interface CanvasPostNode {
   id: string;
   item: FeedItem;
@@ -160,9 +167,23 @@ export interface StorySlide {
 export interface Story {
   id: string;
   authorId: string;
+  author?: {
+    id?: string;
+    username: string;
+    firstName?: string | null;
+    lastName?: string | null;
+    avatarUrl?: string | null;
+  } | null;
   visibility: "PUBLIC" | "CLOSE_FRIENDS";
   blocks: StoryBlock[];
   slides?: StorySlide[];
+  durationMs?: number;
+  mediaDurationMs?: number | null;
+  closeFriends?: boolean;
+  archived?: boolean;
+  likeCount?: number;
+  likedByViewer?: boolean;
+  remainingLifeSeconds?: number | null;
   createdAt?: string | null;
   expiresAt?: string | null;
 }
@@ -170,12 +191,39 @@ export interface Story {
 export interface StoryRailItem {
   authorId: string;
   authorName: string;
+  author?: {
+    id?: string;
+    username: string;
+    firstName?: string | null;
+    lastName?: string | null;
+    avatarUrl?: string | null;
+  } | null;
   avatarUrl?: string | null;
   storyIds: string[];
   activeCount: number;
   seen: boolean;
   closeFriends: boolean;
+  isViewer?: boolean;
+  oldestAt?: string | null;
   latestAt?: string | null;
+}
+
+export interface StoryGroup {
+  authorId: string;
+  authorName: string;
+  author?: Story["author"];
+  avatarUrl?: string | null;
+  stories: Story[];
+  startStoryId?: string | null;
+  archive: boolean;
+}
+
+export interface StoryArchiveResponse {
+  ownerId: string;
+  owner?: Story["author"];
+  stories: Story[];
+  cursor?: string | null;
+  nextCursor?: string | null;
 }
 
 export interface CreateStoryInput {
@@ -191,4 +239,13 @@ export interface SessionUser {
   firstName?: string | null;
   lastName?: string | null;
   avatarUrl?: string | null;
+}
+
+export interface AccountSearchUser {
+  id: string;
+  username: string;
+  firstName?: string | null;
+  lastName?: string | null;
+  avatarUrl?: string | null;
+  bio?: string | null;
 }

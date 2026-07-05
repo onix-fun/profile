@@ -3,6 +3,8 @@ package com.onix.content
 import com.onix.content.domain.*
 import com.onix.content.service.ContentService
 import com.onix.content.service.InMemoryContentRepository
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -78,6 +80,104 @@ class ContentServiceTest {
     }
 
     @Test
+    fun `stories feed enriches authors and filters close friends visibility`() {
+        val service = service()
+        service.createStory(user, CreateStoryInput(blocks = listOf(textBlock("Public")), visibility = Visibility.PUBLIC))
+        service.createStory(viewer, CreateStoryInput(blocks = listOf(textBlock("Close")), visibility = Visibility.CLOSE_FRIENDS))
+
+        val feed = service.storiesFeed(
+            viewerId = user.id,
+            limit = 10,
+            authorResolver = { id ->
+                when (id) {
+                    user.id -> AccountUser(id = user.id, username = user.username, avatarUrl = "/api/avatars/alice")
+                    viewer.id -> AccountUser(id = viewer.id, username = viewer.username, avatarUrl = "/api/avatars/viewer")
+                    else -> null
+                }
+            },
+            visibilityResolver = { ownerId ->
+                AccountVisibility(ownerId = ownerId, viewerId = user.id, isCloseFriend = ownerId == viewer.id)
+            }
+        )
+
+        val byAuthor = feed.associateBy { it.authorName }
+        assertEquals(setOf("viewer", "alice"), byAuthor.keys)
+        assertEquals("/api/avatars/viewer", byAuthor.getValue("viewer").avatarUrl)
+        assertTrue(byAuthor.getValue("viewer").closeFriends)
+    }
+
+    @Test
+    fun `stories feed puts viewer first and keeps author stories oldest first`() {
+        val repo = InMemoryContentRepository()
+        val service = ContentService(repository = repo, clock = fixedClock())
+        val now = Instant.parse("2026-07-05T00:00:00Z")
+        val first = repo.saveStory(Story(authorId = user.id, blocks = listOf(textBlock("First")), createdAt = now.minusSeconds(120), expiresAt = now.plusSeconds(600)))
+        val second = repo.saveStory(Story(authorId = user.id, blocks = listOf(textBlock("Second")), createdAt = now.minusSeconds(60), expiresAt = now.plusSeconds(600)))
+        repo.saveStory(Story(authorId = viewer.id, blocks = listOf(textBlock("Viewer")), createdAt = now.minusSeconds(30), expiresAt = now.plusSeconds(600)))
+
+        val feed = service.storiesFeed(
+            viewerId = viewer.id,
+            limit = 10,
+            authorResolver = { id -> AccountUser(id = id, username = if (id == viewer.id) viewer.username else user.username) },
+            visibilityResolver = { ownerId -> AccountVisibility(ownerId = ownerId, viewerId = viewer.id) }
+        )
+
+        assertEquals(viewer.id, feed.first().authorId)
+        assertEquals(listOf(first.id, second.id), feed.first { it.authorId == user.id }.storyIds)
+    }
+
+    @Test
+    fun `expired stories remain queryable through archive`() {
+        val repo = InMemoryContentRepository()
+        val service = ContentService(repository = repo, clock = fixedClock())
+        val now = Instant.parse("2026-07-05T00:00:00Z")
+        repo.saveStory(Story(authorId = user.id, blocks = listOf(textBlock("Expired")), createdAt = now.minusSeconds(90_000), expiresAt = now.minusSeconds(3_600)))
+
+        val feed = service.storiesFeed(
+            viewerId = viewer.id,
+            limit = 10,
+            visibilityResolver = { ownerId -> AccountVisibility(ownerId = ownerId, viewerId = viewer.id) }
+        )
+        val archive = service.storyArchive(
+            ownerId = user.id,
+            visibility = AccountVisibility(ownerId = user.id, viewerId = viewer.id),
+            author = AccountUser(id = user.id, username = user.username),
+            limit = 10
+        )
+
+        assertTrue(feed.none { it.authorId == user.id })
+        assertEquals(1, archive.stories.size)
+        assertTrue(archive.stories.first().archived)
+    }
+
+    @Test
+    fun `record story view updates feed seen state`() {
+        val service = service()
+        val story = service.createStory(user, CreateStoryInput(blocks = listOf(textBlock("Seen"))))
+
+        service.recordStoryView(viewer, story.id)
+        val feed = service.storiesFeed(
+            viewerId = viewer.id,
+            limit = 10,
+            visibilityResolver = { ownerId -> AccountVisibility(ownerId = ownerId, viewerId = viewer.id) }
+        )
+
+        assertTrue(feed.first { it.authorId == user.id }.seen)
+    }
+
+    @Test
+    fun `video story duration is capped to one minute`() {
+        val service = service()
+        val story = service.createStory(user, CreateStoryInput(blocks = listOf(ContentBlock(
+            type = ContentBlockType.VIDEO,
+            data = JsonObject(mapOf("durationMs" to JsonPrimitive(120_000), "fileName" to JsonPrimitive("clip.mp4")))
+        ))))
+
+        assertEquals(60_000L, story.durationMs)
+        assertEquals(JsonPrimitive(60_000L), story.blocks.first().data["trimEndMs"])
+    }
+
+    @Test
     fun `post likes are idempotent and returned with viewer state`() {
         val service = service()
         val post = service.createPost(user, CreatePostInput(text = "Likeable"))
@@ -95,8 +195,37 @@ class ContentServiceTest {
         assertEquals(0L, unliked.likeCount)
     }
 
+    @Test
+    fun `story likes are idempotent and returned with viewer state`() {
+        val service = service()
+        val story = service.createStory(user, CreateStoryInput(blocks = listOf(textBlock("Likeable story"))))
+
+        val liked = service.likeStory(viewer, story.id)
+        service.likeStory(viewer, story.id)
+        val loaded = service.story(story.id, viewer.id)
+        val group = service.storyGroup(
+            viewerId = viewer.id,
+            authorId = user.id,
+            startStoryId = story.id,
+            visibilityResolver = { ownerId -> AccountVisibility(ownerId = ownerId, viewerId = viewer.id) }
+        )
+        val unliked = service.unlikeStory(viewer, story.id)
+
+        assertTrue(liked.liked)
+        assertEquals(1L, liked.likeCount)
+        assertEquals(1L, loaded?.likeCount)
+        assertEquals(true, loaded?.likedByViewer)
+        assertEquals(1L, group.stories.first().likeCount)
+        assertEquals(true, group.stories.first().likedByViewer)
+        assertEquals(false, unliked.liked)
+        assertEquals(0L, unliked.likeCount)
+    }
+
     private fun service() = ContentService(
         repository = InMemoryContentRepository(),
-        clock = Clock.fixed(Instant.parse("2026-07-05T00:00:00Z"), ZoneOffset.UTC)
+        clock = fixedClock()
     )
+
+    private fun fixedClock(): Clock =
+        Clock.fixed(Instant.parse("2026-07-05T00:00:00Z"), ZoneOffset.UTC)
 }

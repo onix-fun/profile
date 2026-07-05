@@ -121,6 +121,13 @@ fun Application.registerRoutes(config: AppConfig) {
                 account.unfollow(userId, token)
                 call.respond(HttpStatusCode.NoContent)
             }
+
+            get("/profile-search/users") {
+                val token = call.accessToken() ?: return@get call.respondAuthRequired(config)
+                val query = call.request.queryParameters["q"].orEmpty()
+                val limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: 10
+                call.respond(account.searchUsers(query, limit, token))
+            }
         }
     }
 }

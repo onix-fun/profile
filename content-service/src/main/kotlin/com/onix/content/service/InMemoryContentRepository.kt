@@ -12,6 +12,8 @@ class InMemoryContentRepository : ContentRepository {
     private val stories = ConcurrentHashMap<String, Story>()
     private val comments = ConcurrentHashMap<String, Comment>()
     private val postLikes = ConcurrentHashMap.newKeySet<Pair<String, String>>()
+    private val storyLikes = ConcurrentHashMap.newKeySet<Pair<String, String>>()
+    private val storyViews = ConcurrentHashMap<String, Instant>()
 
     override fun savePost(post: Post): Post {
         posts[post.id] = post
@@ -43,13 +45,24 @@ class InMemoryContentRepository : ContentRepository {
     override fun isPostLikedBy(postId: String, userId: String): Boolean =
         postLikes.contains(postId to userId)
 
+    override fun setStoryLike(storyId: String, userId: String, liked: Boolean) {
+        val key = storyId to userId
+        if (liked) storyLikes.add(key) else storyLikes.remove(key)
+    }
+
+    override fun countStoryLikes(storyId: String): Long =
+        storyLikes.count { it.first == storyId }.toLong()
+
+    override fun isStoryLikedBy(storyId: String, userId: String): Boolean =
+        storyLikes.contains(storyId to userId)
+
     override fun saveStory(story: Story): Story {
         stories[story.id] = story
         return story
     }
 
     override fun findStory(id: String): Story? =
-        stories[id]?.takeIf { it.status == ContentStatus.ACTIVE && it.expiresAt.isAfter(Instant.now()) }
+        stories[id]?.takeIf { it.status != ContentStatus.DELETED }
 
     override fun listActiveStories(now: Instant, limit: Int): List<Story> =
         stories.values
@@ -62,6 +75,24 @@ class InMemoryContentRepository : ContentRepository {
             .filter { it.authorId == authorId && it.status == ContentStatus.ACTIVE && it.expiresAt.isAfter(now) }
             .sortedByDescending { it.createdAt }
             .take(limit)
+
+    override fun listArchivedStoriesByAuthor(authorId: String, now: Instant, limit: Int, cursor: Instant?): List<Story> =
+        stories.values
+            .filter { story ->
+                story.authorId == authorId &&
+                    story.status != ContentStatus.DELETED &&
+                    (story.status == ContentStatus.ARCHIVED || !story.expiresAt.isAfter(now)) &&
+                    (cursor == null || story.createdAt.isBefore(cursor))
+            }
+            .sortedByDescending { it.createdAt }
+            .take(limit)
+
+    override fun recordStoryView(storyId: String, userId: String, viewedAt: Instant) {
+        storyViews["$storyId:$userId"] = viewedAt
+    }
+
+    override fun isStoryViewed(storyId: String, userId: String): Boolean =
+        storyViews.containsKey("$storyId:$userId")
 
     override fun saveComment(comment: Comment): Comment {
         comments[comment.id] = comment

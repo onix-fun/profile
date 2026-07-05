@@ -1,5 +1,5 @@
 import { api } from "@/api/client";
-import type { ProfileCanvasResponse, Relationship, SessionUser } from "@/api/types";
+import type { AccountSearchUser, ProfileCanvasResponse, Relationship, SessionUser } from "@/api/types";
 
 export class ProfileService {
   static async session(): Promise<SessionUser> {
@@ -19,5 +19,12 @@ export class ProfileService {
 
   static async unfollow(userId: string): Promise<void> {
     await api.delete(`/profiles/${userId}/follow`);
+  }
+
+  static async searchUsers(query: string, limit = 10): Promise<AccountSearchUser[]> {
+    const response = await api.get<AccountSearchUser[]>("/profile-search/users", {
+      params: { q: query, limit },
+    });
+    return response.data;
   }
 }

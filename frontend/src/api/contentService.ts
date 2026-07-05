@@ -1,6 +1,6 @@
 import axios from "axios";
-import { runtimeConfig } from "@/runtime-config";
 import { refreshBrowserSession } from "@/api/client";
+import { redirectToAccount } from "@/api/authRedirect";
 import type {
   CommentItem,
   ContentBlock,
@@ -9,8 +9,11 @@ import type {
   FeedItem,
   PostReactionState,
   Story,
+  StoryArchiveResponse,
   StoryBlock,
+  StoryGroup,
   StoryRailItem,
+  StoryReactionState,
 } from "@/api/types";
 
 const graphql = axios.create({
@@ -38,8 +41,7 @@ graphql.interceptors.response.use(
           // Fall through to Account redirect.
         }
       }
-      const redirect = encodeURIComponent(window.location.href);
-      window.location.assign(`${runtimeConfig.accountFrontendUrl}/?redirect=${redirect}`);
+      redirectToAccount();
       return new Promise(() => undefined);
     }
     return Promise.reject(error);
@@ -153,6 +155,16 @@ export class ContentService {
     return data.story;
   }
 
+  static async storyGroup(authorId: string, startStoryId?: string, archive = false): Promise<StoryGroup> {
+    const data = await request<{ storyGroup: StoryGroup }>("storyGroup", { authorId, startStoryId, archive });
+    return data.storyGroup;
+  }
+
+  static async storyArchive(ownerId: string, cursor?: string | null, limit = 40): Promise<StoryArchiveResponse> {
+    const data = await request<{ storyArchive: StoryArchiveResponse }>("storyArchive", { ownerId, cursor, limit });
+    return data.storyArchive;
+  }
+
   static async createStory(input: CreateStoryInput, files: File[] = []): Promise<Story> {
     const normalized = {
       ...input,
@@ -173,6 +185,16 @@ export class ContentService {
   static async recordStoryView(storyId: string): Promise<boolean> {
     const data = await request<{ recordStoryView: boolean }>("recordStoryView", { storyId });
     return data.recordStoryView;
+  }
+
+  static async likeStory(storyId: string): Promise<StoryReactionState> {
+    const data = await request<{ likeStory: StoryReactionState }>("likeStory", { storyId });
+    return data.likeStory;
+  }
+
+  static async unlikeStory(storyId: string): Promise<StoryReactionState> {
+    const data = await request<{ unlikeStory: StoryReactionState }>("unlikeStory", { storyId });
+    return data.unlikeStory;
   }
 
   static async createComment(input: { postId: string; parentId?: string; text: string }) {

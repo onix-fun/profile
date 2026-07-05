@@ -71,7 +71,13 @@ export function mergeSeenState(items: StoryRailItem[]): StoryRailItem[] {
 
 export function sortStoryRail(items: StoryRailItem[]): StoryRailItem[] {
   return [...items].sort((a, b) => {
+    if (a.isViewer !== b.isViewer) return a.isViewer ? -1 : 1;
     if (a.seen !== b.seen) return a.seen ? 1 : -1;
     return Date.parse(b.latestAt || "1970-01-01") - Date.parse(a.latestAt || "1970-01-01");
   });
+}
+
+export function nextAuthorAfter(items: StoryRailItem[], authorId: string): StoryRailItem | null {
+  const index = items.findIndex((item) => item.authorId === authorId);
+  return index >= 0 ? items[index + 1] || null : null;
 }

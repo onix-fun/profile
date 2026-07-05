@@ -6,13 +6,13 @@ import FeedPage from "@/features/content/FeedPage.vue";
 import PostOverlay from "@/features/post/PostOverlay.vue";
 
 const route = useRoute();
-const isStoryViewer = computed(() => route.name === "StoryViewer");
+const isFocusedStoryRoute = computed(() => route.name === "StoryViewer" || route.name === "StoryArchive");
 const isPostOverlay = computed(() => route.name === "PostOverlay");
 </script>
 
 <template>
   <PToast />
-  <router-view v-if="isStoryViewer" />
+  <router-view v-if="isFocusedStoryRoute" />
   <AppShell v-else>
     <template v-if="isPostOverlay">
       <FeedPage />

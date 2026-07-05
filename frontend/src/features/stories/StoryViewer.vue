@@ -1,51 +1,60 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ContentService } from "@/api/contentService";
-import type { Story, StoryBlock, StorySlide } from "@/api/types";
+import type { Story, StoryBlock, StoryGroup, StoryRailItem } from "@/api/types";
+import { displayUsername } from "@/features/display/displayText";
+import { mergeSeenState, nextAuthorAfter, sortStoryRail } from "@/features/stories/storyState";
 
 const route = useRoute();
 const router = useRouter();
-const story = ref<Story | null>(null);
-const slideIndex = ref(0);
+const group = ref<StoryGroup | null>(null);
+const rail = ref<StoryRailItem[]>([]);
+const storyIndex = ref(0);
 const progress = ref(0);
-const isPaused = ref(false);
+const holdPaused = ref(false);
+const lockedPaused = ref(false);
 const muted = ref(true);
 const captionOpen = ref(false);
+const isTogglingLike = ref(false);
 let timer: number | undefined;
-let startedAt = 0;
+let elapsedMs = 0;
+let lastTickAt = 0;
 
-const slides = computed<StorySlide[]>(() => {
-  if (!story.value) return [];
-  if (story.value.slides?.length) return story.value.slides;
-  return [{
-    id: `${story.value.id}-slide`,
-    blocks: story.value.blocks,
-    durationMs: 5000,
-    background: "#111827",
-  }];
-});
-
-const activeSlide = computed(() => slides.value[slideIndex.value]);
-const renderBlocks = computed(() => (activeSlide.value?.blocks || []).filter((block) => block.type !== "TEXT"));
+const isArchive = computed(() => route.query.archive === "1" || route.query.archive === "true");
+const isPaused = computed(() => holdPaused.value || lockedPaused.value || captionOpen.value);
+const stories = computed(() => group.value?.stories || []);
+const activeStory = computed(() => stories.value[storyIndex.value] || null);
+const renderBlocks = computed(() => (activeStory.value?.blocks || []).filter((block) => block.type !== "TEXT"));
 const storyCaption = computed(() => {
-  const blocks = activeSlide.value?.blocks || story.value?.blocks || [];
+  const blocks = activeStory.value?.blocks || [];
   const textBlock = blocks.find((block) => block.type === "TEXT" && typeof block.data.text === "string");
   const caption = blocks.find((block) => typeof block.data.caption === "string");
   return String(textBlock?.data.text || caption?.data.caption || "").trim();
 });
 const storyTags = computed(() => {
   const fromCaption = Array.from(storyCaption.value.matchAll(/(^|\s)#([\p{L}\p{N}_-]+)/gu)).map((match) => match[2].toLowerCase());
-  const fromData = (activeSlide.value?.blocks || story.value?.blocks || [])
+  const fromData = (activeStory.value?.blocks || [])
     .flatMap((block) => Array.isArray(block.data.tags) ? block.data.tags : [])
     .filter((tag): tag is string => typeof tag === "string");
   return Array.from(new Set([...fromCaption, ...fromData]));
 });
+const authorName = computed(() => displayUsername(group.value?.author?.username || group.value?.authorName, "User"));
+const authorAvatar = computed(() => group.value?.author?.avatarUrl || group.value?.avatarUrl || "");
+const showCloseFriends = computed(() => Boolean(activeStory.value?.closeFriends || activeStory.value?.visibility === "CLOSE_FRIENDS"));
+const activeLikeCount = computed(() => activeStory.value?.likeCount || 0);
+const activeLiked = computed(() => Boolean(activeStory.value?.likedByViewer));
+const lifetimeLabel = computed(() => {
+  if (isArchive.value) return formatArchiveTime(activeStory.value?.createdAt);
+  const seconds = activeStory.value?.remainingLifeSeconds ?? secondsUntil(activeStory.value?.expiresAt);
+  if (seconds <= 60) return "now";
+  const hours = Math.floor(seconds / 3600);
+  if (hours > 0) return `${hours}h`;
+  return `${Math.max(1, Math.floor(seconds / 60))}m`;
+});
 
-onMounted(async () => {
-  story.value = await ContentService.story(String(route.params.storyId || ""));
-  await ContentService.recordStoryView(String(route.params.storyId || ""));
-  startProgress();
+onMounted(() => {
+  void loadQueue();
   window.addEventListener("keydown", onKeydown);
 });
 
@@ -54,15 +63,50 @@ onBeforeUnmount(() => {
   window.removeEventListener("keydown", onKeydown);
 });
 
+watch(() => route.fullPath, () => {
+  void loadQueue();
+});
+
+watch(isPaused, () => {
+  lastTickAt = Date.now();
+  void syncMediaPlayback();
+});
+
+async function loadQueue() {
+  stopProgress();
+  captionOpen.value = false;
+  lockedPaused.value = false;
+  const startStoryId = String(route.params.storyId || "");
+  let authorId = typeof route.query.author === "string" ? route.query.author : "";
+  if (!authorId) {
+    const loaded = await ContentService.story(startStoryId);
+    authorId = loaded.authorId;
+  }
+  if (!isArchive.value) {
+    rail.value = sortStoryRail(mergeSeenState(await ContentService.storiesFeed()));
+  }
+  group.value = await ContentService.storyGroup(authorId, startStoryId, isArchive.value);
+  const startIndex = stories.value.findIndex((story) => story.id === (group.value?.startStoryId || startStoryId));
+  storyIndex.value = Math.max(0, startIndex);
+  await recordActiveView();
+  startProgress();
+}
+
 function startProgress() {
   stopProgress();
   progress.value = 0;
-  startedAt = Date.now();
+  elapsedMs = 0;
+  lastTickAt = Date.now();
   timer = window.setInterval(() => {
-    if (isPaused.value || !activeSlide.value) return;
-    progress.value = Math.min(100, ((Date.now() - startedAt) / activeSlide.value.durationMs) * 100);
-    if (progress.value >= 100) next();
+    const now = Date.now();
+    if (!isPaused.value && activeStory.value) {
+      elapsedMs += now - lastTickAt;
+      progress.value = Math.min(100, (elapsedMs / activeDurationMs()) * 100);
+      if (progress.value >= 100) next();
+    }
+    lastTickAt = now;
   }, 80);
+  void syncMediaPlayback();
 }
 
 function stopProgress() {
@@ -70,35 +114,85 @@ function stopProgress() {
   timer = undefined;
 }
 
-function next() {
-  captionOpen.value = false;
-  if (slideIndex.value < slides.value.length - 1) {
-    slideIndex.value += 1;
-    startProgress();
-  } else {
-    close();
+async function recordActiveView() {
+  if (!activeStory.value?.id) return;
+  window.localStorage.setItem(`story-seen:${activeStory.value.id}`, "true");
+  await ContentService.recordStoryView(activeStory.value.id);
+}
+
+async function toggleStoryLike() {
+  const story = activeStory.value;
+  if (!story || isTogglingLike.value) return;
+  isTogglingLike.value = true;
+  try {
+    const reaction = story.likedByViewer
+      ? await ContentService.unlikeStory(story.id)
+      : await ContentService.likeStory(story.id);
+    replaceActiveStory({
+      ...story,
+      likedByViewer: reaction.liked,
+      likeCount: reaction.likeCount,
+    });
+  } finally {
+    isTogglingLike.value = false;
   }
+}
+
+function replaceActiveStory(story: Story) {
+  if (!group.value) return;
+  group.value = {
+    ...group.value,
+    stories: group.value.stories.map((item) => item.id === story.id ? story : item),
+  };
+}
+
+function activeDurationMs(): number {
+  const duration = Number(activeStory.value?.durationMs || firstMedia(activeStory.value)?.data.durationMs || 5000);
+  return Math.min(Math.max(duration, 1000), 60000);
+}
+
+async function next() {
+  captionOpen.value = false;
+  if (storyIndex.value < stories.value.length - 1) {
+    storyIndex.value += 1;
+    await recordActiveView();
+    startProgress();
+    return;
+  }
+  if (!isArchive.value) {
+    const nextAuthor = group.value ? nextAuthorAfter(rail.value, group.value.authorId) : null;
+    if (nextAuthor?.storyIds[0]) {
+      await router.replace({
+        path: `/story/${encodeURIComponent(nextAuthor.storyIds[0])}`,
+        query: { author: nextAuthor.authorId },
+      });
+      return;
+    }
+  }
+  close();
 }
 
 function prev() {
   captionOpen.value = false;
-  if (slideIndex.value > 0) {
-    slideIndex.value -= 1;
-    startProgress();
-  } else {
-    startProgress();
+  if (storyIndex.value > 0) {
+    storyIndex.value -= 1;
   }
+  startProgress();
 }
 
 function close() {
-  void router.push("/");
+  const back = typeof route.query.from === "string" ? route.query.from : "/";
+  void router.push(back);
 }
 
 function onKeydown(event: KeyboardEvent) {
-  if (event.key === "ArrowRight") next();
+  if (event.key === "ArrowRight") void next();
   if (event.key === "ArrowLeft") prev();
   if (event.key === "Escape") close();
-  if (event.key === " ") isPaused.value = !isPaused.value;
+  if (event.key === " ") {
+    event.preventDefault();
+    lockedPaused.value = !lockedPaused.value;
+  }
 }
 
 function source(block: StoryBlock): string {
@@ -109,34 +203,85 @@ function text(block: StoryBlock): string {
   const value = block.data.text || block.data.fileName;
   return typeof value === "string" ? value : block.type.toLowerCase();
 }
+
+function firstMedia(story: Story | null): StoryBlock | undefined {
+  return story?.blocks.find((block) => block.type !== "TEXT");
+}
+
+function secondsUntil(value?: string | null): number {
+  if (!value) return 0;
+  return Math.max(0, Math.floor((Date.parse(value) - Date.now()) / 1000));
+}
+
+function formatArchiveTime(value?: string | null): string {
+  if (!value) return "";
+  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
+}
+
+async function syncMediaPlayback() {
+  await nextTick();
+  const media = document.querySelector<HTMLVideoElement | HTMLAudioElement>(".story-stage video, .story-stage audio");
+  if (!media) return;
+  if (isPaused.value) {
+    media.pause();
+  } else {
+    await media.play().catch(() => undefined);
+  }
+}
 </script>
 
 <template>
   <section
     class="story-viewer"
-    :style="{ background: activeSlide?.background || '#111827' }"
-    @pointerdown="isPaused = true"
-    @pointerup="isPaused = false"
+    :class="{ 'story-viewer--caption-open': captionOpen }"
+    @pointerdown="holdPaused = true"
+    @pointerup="holdPaused = false"
+    @pointercancel="holdPaused = false"
   >
     <div class="story-progress">
       <span
-        v-for="(slide, index) in slides"
-        :key="slide.id"
+        v-for="(storyItem, index) in stories"
+        :key="storyItem.id"
         class="story-progress__track"
       >
-        <span :style="{ width: index < slideIndex ? '100%' : index === slideIndex ? `${progress}%` : '0%' }"></span>
+        <span :style="{ width: index < storyIndex ? '100%' : index === storyIndex ? `${progress}%` : '0%' }"></span>
       </span>
     </div>
 
+    <header class="story-meta">
+      <span class="story-meta__avatar">
+        <img v-if="authorAvatar" :src="authorAvatar" alt="" />
+        <i v-else class="pi pi-user"></i>
+      </span>
+      <strong>{{ authorName }}</strong>
+      <i v-if="showCloseFriends" class="pi pi-star-fill story-meta__star" aria-label="Close friends"></i>
+      <span class="story-meta__time">{{ lifetimeLabel }}</span>
+    </header>
+
     <button type="button" class="story-close" aria-label="Close story" @click="close"><i class="pi pi-times"></i></button>
-    <button type="button" class="story-mute" aria-label="Toggle mute" @click="muted = !muted">
+    <button type="button" class="story-pause" aria-label="Toggle pause" @click.stop="lockedPaused = !lockedPaused">
+      <i :class="isPaused ? 'pi pi-play' : 'pi pi-pause'"></i>
+    </button>
+    <button type="button" class="story-mute" aria-label="Toggle mute" @click.stop="muted = !muted">
       <i :class="muted ? 'pi pi-volume-off' : 'pi pi-volume-up'"></i>
     </button>
+    <button
+      type="button"
+      class="story-like"
+      :class="{ active: activeLiked }"
+      :disabled="isTogglingLike"
+      :aria-label="activeLiked ? 'Unlike story' : 'Like story'"
+      @pointerdown.stop
+      @click.stop="toggleStoryLike"
+    >
+      <i :class="activeLiked ? 'pi pi-heart-fill' : 'pi pi-heart'"></i>
+      <span>{{ activeLikeCount }}</span>
+    </button>
 
-    <button type="button" class="tap-zone tap-zone--left" aria-label="Previous story" @click="prev"></button>
-    <button type="button" class="tap-zone tap-zone--right" aria-label="Next story" @click="next"></button>
+    <button type="button" class="tap-zone tap-zone--left" aria-label="Previous story" @click.stop="prev"></button>
+    <button type="button" class="tap-zone tap-zone--right" aria-label="Next story" @click.stop="next"></button>
 
-    <main v-if="activeSlide" class="story-stage">
+    <main v-if="activeStory" class="story-stage">
       <article v-for="block in renderBlocks" :key="block.id || text(block)" class="story-block">
         <img v-if="block.type === 'IMAGE' && source(block)" :src="source(block)" alt="" />
         <video v-else-if="block.type === 'VIDEO' && source(block)" :src="source(block)" autoplay playsinline :muted="muted" />
@@ -144,7 +289,7 @@ function text(block: StoryBlock): string {
       </article>
     </main>
 
-    <button v-if="storyCaption" type="button" class="caption-sheet" :class="{ open: captionOpen }" @click="captionOpen = !captionOpen">
+    <button v-if="storyCaption" type="button" class="caption-sheet" :class="{ open: captionOpen }" @click.stop="captionOpen = !captionOpen">
       <span>{{ storyCaption }}</span>
       <strong v-if="storyTags.length">{{ storyTags.map((tag) => `#${tag}`).join(" ") }}</strong>
       <i :class="captionOpen ? 'pi pi-chevron-down' : 'pi pi-chevron-up'"></i>
@@ -160,12 +305,22 @@ function text(block: StoryBlock): string {
   display: grid;
   place-items: center;
   overflow: hidden;
+  background: #0b0f14;
   color: #ffffff;
+}
+
+.story-viewer--caption-open::before {
+  content: "";
+  position: fixed;
+  z-index: 204;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.38);
+  pointer-events: none;
 }
 
 .story-progress {
   position: fixed;
-  z-index: 205;
+  z-index: 207;
   top: 18px;
   left: 18px;
   right: 18px;
@@ -188,10 +343,62 @@ function text(block: StoryBlock): string {
   background: #ffffff;
 }
 
-.story-close,
-.story-mute {
+.story-meta {
   position: fixed;
-  z-index: 206;
+  z-index: 208;
+  top: 34px;
+  left: 22px;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  max-width: min(52vw, 360px);
+  border-radius: 999px;
+  padding: 6px 12px 6px 6px;
+  background: rgba(0, 0, 0, 0.32);
+  backdrop-filter: blur(14px);
+}
+
+.story-meta__avatar {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #f97316, #8b5cf6);
+}
+
+.story-meta__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.story-meta strong,
+.story-meta__time {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.story-meta__time {
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.story-meta__star {
+  color: #86efac;
+  font-size: 13px;
+}
+
+.story-close,
+.story-mute,
+.story-pause,
+.story-like {
+  position: fixed;
+  z-index: 208;
   top: 36px;
   width: 42px;
   height: 42px;
@@ -202,12 +409,39 @@ function text(block: StoryBlock): string {
   cursor: pointer;
 }
 
+.story-like {
+  right: 172px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: auto;
+  min-width: 54px;
+  padding: 0 13px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.story-like.active {
+  background: rgba(225, 29, 72, 0.92);
+}
+
+.story-like:disabled {
+  opacity: 0.72;
+  cursor: progress;
+}
+
 .story-close {
   right: 22px;
 }
 
 .story-mute {
   right: 72px;
+}
+
+.story-pause {
+  right: 122px;
 }
 
 .tap-zone {
@@ -237,6 +471,7 @@ function text(block: StoryBlock): string {
   display: grid;
   overflow: hidden;
   border-radius: 24px;
+  background: #111827;
   box-shadow: 0 32px 100px rgba(0, 0, 0, 0.45);
 }
 
@@ -257,18 +492,9 @@ function text(block: StoryBlock): string {
   width: calc(100% - 44px);
 }
 
-.story-block p {
-  max-width: 82%;
-  margin: 0;
-  font-size: clamp(30px, 7vw, 58px);
-  font-weight: 900;
-  line-height: 1.05;
-  text-align: center;
-}
-
 .caption-sheet {
   position: fixed;
-  z-index: 207;
+  z-index: 209;
   left: 50%;
   bottom: 18px;
   width: min(430px, calc(100vw - 32px));
@@ -320,5 +546,21 @@ function text(block: StoryBlock): string {
   grid-column: 2;
   grid-row: 1 / span 2;
   align-self: center;
+}
+
+@media (max-width: 720px) {
+  .story-meta {
+    max-width: calc(100vw - 176px);
+  }
+
+  .story-pause {
+    right: 116px;
+  }
+
+  .story-stage {
+    width: 100vw;
+    height: 100dvh;
+    border-radius: 0;
+  }
 }
 </style>

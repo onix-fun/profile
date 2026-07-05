@@ -3,6 +3,8 @@ import { computed, onMounted, ref } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { ProfileService } from "@/api/profileService";
 import type { SessionUser } from "@/api/types";
+import { runtimeConfig } from "@/runtime-config";
+import { accountSettingsUrl } from "@/features/profile/accountLinks";
 
 const router = useRouter();
 const route = useRoute();
@@ -15,6 +17,7 @@ const initials = computed(() => {
 });
 const chromeHidden = computed(() => route.name === "CreatePost" || route.name === "CreateStory");
 const headerVisible = computed(() => !chromeHidden.value && route.path !== "/");
+const settingsHref = computed(() => accountSettingsUrl(runtimeConfig.accountFrontendUrl, window.location.href));
 
 onMounted(async () => {
   user.value = await ProfileService.session();
@@ -75,6 +78,7 @@ function openCreateStory() {
           <RouterLink to="/search" @click="closeMenu"><i class="pi pi-search"></i>Search</RouterLink>
           <button type="button" @click="openCreatePost"><i class="pi pi-plus-circle"></i>Create post</button>
           <button type="button" @click="openCreateStory"><i class="pi pi-stopwatch"></i>Create story</button>
+          <a :href="settingsHref" @click="closeMenu"><i class="pi pi-cog"></i>Settings</a>
         </nav>
       </aside>
     </Transition>

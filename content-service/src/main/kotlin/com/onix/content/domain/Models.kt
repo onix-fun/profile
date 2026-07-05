@@ -23,13 +23,22 @@ object InstantIsoSerializer : KSerializer<Instant> {
 enum class Visibility { PUBLIC, CLOSE_FRIENDS }
 
 @Serializable
-enum class ContentStatus { ACTIVE, DELETED }
+enum class ContentStatus { ACTIVE, ARCHIVED, DELETED }
 
 @Serializable
 enum class ContentBlockType { TEXT, IMAGE, VIDEO, AUDIO }
 
 @Serializable
 data class SessionUser(
+    val id: String,
+    val username: String,
+    val firstName: String? = null,
+    val lastName: String? = null,
+    val avatarUrl: String? = null
+)
+
+@Serializable
+data class AccountUser(
     val id: String,
     val username: String,
     val firstName: String? = null,
@@ -88,9 +97,17 @@ data class Post(
 data class Story(
     val id: String = UUID.randomUUID().toString(),
     val authorId: String,
+    val author: AccountUser? = null,
     val blocks: List<ContentBlock> = emptyList(),
     val visibility: Visibility = Visibility.PUBLIC,
     val status: ContentStatus = ContentStatus.ACTIVE,
+    val durationMs: Long = 5_000,
+    val mediaDurationMs: Long? = null,
+    val closeFriends: Boolean = visibility == Visibility.CLOSE_FRIENDS,
+    val archived: Boolean = status == ContentStatus.ARCHIVED,
+    val likeCount: Long = 0,
+    val likedByViewer: Boolean = false,
+    val remainingLifeSeconds: Long? = null,
     @Serializable(with = InstantIsoSerializer::class)
     val createdAt: Instant = Instant.now(),
     @Serializable(with = InstantIsoSerializer::class)
@@ -126,6 +143,13 @@ data class PostReactionState(
 )
 
 @Serializable
+data class StoryReactionState(
+    val storyId: String,
+    val liked: Boolean,
+    val likeCount: Long
+)
+
+@Serializable
 data class ProfileContentResponse(
     val posts: List<Post> = emptyList(),
     val stories: List<Story> = emptyList(),
@@ -136,13 +160,37 @@ data class ProfileContentResponse(
 data class StoryRailItem(
     val authorId: String,
     val authorName: String,
+    val author: AccountUser? = null,
     val avatarUrl: String? = null,
     val storyIds: List<String>,
     val activeCount: Int,
     val seen: Boolean = false,
     val closeFriends: Boolean = false,
+    val isViewer: Boolean = false,
+    @Serializable(with = InstantIsoSerializer::class)
+    val oldestAt: Instant,
     @Serializable(with = InstantIsoSerializer::class)
     val latestAt: Instant
+)
+
+@Serializable
+data class StoryGroup(
+    val authorId: String,
+    val authorName: String,
+    val author: AccountUser? = null,
+    val avatarUrl: String? = null,
+    val stories: List<Story> = emptyList(),
+    val startStoryId: String? = null,
+    val archive: Boolean = false
+)
+
+@Serializable
+data class StoryArchiveResponse(
+    val ownerId: String,
+    val owner: AccountUser? = null,
+    val stories: List<Story> = emptyList(),
+    val cursor: String? = null,
+    val nextCursor: String? = null
 )
 
 @Serializable

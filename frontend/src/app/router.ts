@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from "vue-router";
 import { runtimeConfig } from "@/runtime-config";
+import { redirectToAccount } from "@/api/authRedirect";
 import { ProfileService } from "@/api/profileService";
 import FeedPage from "@/features/content/FeedPage.vue";
 import PostOverlay from "@/features/post/PostOverlay.vue";
@@ -48,6 +49,11 @@ export const router = createRouter({
       component: () => import("@/features/stories/StoryViewer.vue"),
     },
     {
+      path: "/u/:nickname/stories/archive",
+      name: "StoryArchive",
+      component: () => import("@/features/stories/StoryArchivePage.vue"),
+    },
+    {
       path: "/u/:nickname",
       name: "Profile",
       component: () => import("@/features/profile/ProfilePage.vue"),
@@ -60,5 +66,11 @@ export const router = createRouter({
 });
 
 router.beforeEach(async () => {
-  await requireSession();
+  try {
+    await requireSession();
+    return true;
+  } catch {
+    redirectToAccount();
+    return false;
+  }
 });

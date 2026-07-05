@@ -18,22 +18,49 @@ vi.mock("@/api/profileService", () => ({
 }));
 
 vi.mock("@/api/contentService", () => ({
-  ContentService: {
-    story: vi.fn().mockResolvedValue({
-      id: "story-1",
-      authorId: "alice",
-      visibility: "PUBLIC",
-      blocks: [
-        { id: "media", type: "IMAGE", data: { src: "https://example.test/story.jpg" } },
-        { id: "caption", type: "TEXT", data: { text: "A compact caption #travel", tags: ["travel"] } },
-      ],
-    }),
+	ContentService: {
+	    story: vi.fn().mockResolvedValue({
+	      id: "story-1",
+	      authorId: "alice",
+	      author: { username: "alice" },
+	      visibility: "PUBLIC",
+	      blocks: [
+	        { id: "media", type: "IMAGE", data: { src: "https://example.test/story.jpg" } },
+	        { id: "caption", type: "TEXT", data: { text: "A compact caption #travel", tags: ["travel"] } },
+	      ],
+	    }),
+	    storyGroup: vi.fn().mockResolvedValue({
+	      authorId: "alice",
+	      authorName: "alice",
+	      author: { username: "alice" },
+	      archive: false,
+	      startStoryId: "story-1",
+	      stories: [{
+	        id: "story-1",
+	        authorId: "alice",
+	        author: { username: "alice" },
+	        visibility: "PUBLIC",
+	        durationMs: 5000,
+	        likeCount: 0,
+	        likedByViewer: false,
+	        remainingLifeSeconds: 3600,
+	        blocks: [
+	          { id: "media", type: "IMAGE", data: { src: "https://example.test/story.jpg" } },
+	          { id: "caption", type: "TEXT", data: { text: "A compact caption #travel", tags: ["travel"] } },
+	        ],
+	      }],
+	    }),
+	    storiesFeed: vi.fn().mockResolvedValue([
+	      { authorId: "alice", authorName: "alice", storyIds: ["story-1"], activeCount: 1, seen: false, closeFriends: false, latestAt: "2026-01-01T00:00:00Z" },
+	    ]),
     mediaSource: vi.fn((block: { data: Record<string, unknown> }) => {
       const direct = block.data.previewUrl || block.data.url || block.data.src;
       if (typeof direct === "string") return direct;
       return typeof block.data.blobId === "string" ? `/content-media/${encodeURIComponent(block.data.blobId)}` : "";
     }),
     recordStoryView: vi.fn().mockResolvedValue(true),
+    likeStory: vi.fn().mockResolvedValue({ storyId: "story-1", liked: true, likeCount: 1 }),
+    unlikeStory: vi.fn().mockResolvedValue({ storyId: "story-1", liked: false, likeCount: 0 }),
   },
 }));
 
@@ -144,14 +171,30 @@ describe("story viewer caption", () => {
     await router.isReady();
 
     const wrapper = mount(StoryViewer, { global: { plugins: [router] } });
-    await Promise.resolve();
-    await Promise.resolve();
-
+    await vi.waitFor(() => expect(wrapper.find(".caption-sheet").exists()).toBe(true));
     const sheet = wrapper.find(".caption-sheet");
-    expect(sheet.exists()).toBe(true);
     expect(sheet.text()).toContain("A compact caption #travel");
     await sheet.trigger("click");
     expect(sheet.classes()).toContain("open");
+
+    wrapper.unmount();
+  });
+
+  it("likes the active story and updates the button state", async () => {
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: "/story/:storyId", component: StoryViewer }],
+    });
+    await router.push("/story/story-1");
+    await router.isReady();
+
+    const wrapper = mount(StoryViewer, { global: { plugins: [router] } });
+    await vi.waitFor(() => expect(wrapper.find(".caption-sheet").exists()).toBe(true));
+    await wrapper.find(".story-like").trigger("click");
+
+    expect(ContentService.likeStory).toHaveBeenCalledWith("story-1");
+    await vi.waitFor(() => expect(wrapper.find(".story-like").text()).toContain("1"));
+    expect(wrapper.find(".story-like").classes()).toContain("active");
 
     wrapper.unmount();
   });
@@ -172,10 +215,13 @@ describe("route auth guard", () => {
     expect(appRouter.currentRoute.value.path).toBe("/search");
   });
 
-  it("keeps navigation unresolved when the session request redirects to Account", async () => {
+  it("aborts navigation when the session request redirects to Account", async () => {
     vi.mocked(ProfileService.session).mockRejectedValue(new Error("AUTH_REQUIRED"));
 
-    await expect(appRouter.push("/post/new")).rejects.toThrow("AUTH_REQUIRED");
+    const result = await appRouter.push("/post/new");
+
+    expect(result).toBeTruthy();
+    expect(appRouter.currentRoute.value.path).not.toBe("/post/new");
   });
 });
 
@@ -210,7 +256,7 @@ describe("app shell", () => {
     expect(wrapper.text()).toContain("Feed");
     expect(wrapper.text()).toContain("Create post");
     expect(wrapper.text()).toContain("Create story");
-    expect(wrapper.text()).not.toContain("Settings");
+    expect(wrapper.text()).toContain("Settings");
     expect(wrapper.text()).not.toContain("Logout");
   });
 

@@ -14,6 +14,16 @@ data class SessionUser(
 )
 
 @Serializable
+data class AccountSearchUser(
+    val id: String,
+    val username: String,
+    val firstName: String? = null,
+    val lastName: String? = null,
+    val avatarUrl: String? = null,
+    val bio: String? = null
+)
+
+@Serializable
 data class Relationship(
     val isFollowing: Boolean = false,
     val isFollowedBy: Boolean = false,

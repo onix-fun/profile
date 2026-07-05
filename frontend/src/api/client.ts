@@ -1,5 +1,6 @@
 import axios from "axios";
 import { runtimeConfig } from "@/runtime-config";
+import { redirectToAccount } from "@/api/authRedirect";
 
 export const api = axios.create({
   baseURL: runtimeConfig.apiBaseUrl,
@@ -45,6 +46,10 @@ api.interceptors.response.use(
         }
       }
       window.location.assign(loginUrl);
+      return new Promise(() => undefined);
+    }
+    if (error.response?.status === 401) {
+      redirectToAccount();
       return new Promise(() => undefined);
     }
     return Promise.reject(error);

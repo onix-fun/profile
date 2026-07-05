@@ -128,6 +128,46 @@ class JdbcContentRepository(private val ds: DataSource) : ContentRepository {
         }
     }
 
+    override fun setStoryLike(storyId: String, userId: String, liked: Boolean) {
+        ds.connection.use { conn ->
+            if (liked) {
+                conn.prepareStatement(
+                    """
+                    INSERT INTO content.story_likes (story_id, user_id, created_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT (story_id, user_id) DO NOTHING
+                    """.trimIndent()
+                ).use { ps ->
+                    ps.setObject(1, UUID.fromString(storyId))
+                    ps.setObject(2, UUID.fromString(userId))
+                    ps.setTimestamp(3, Timestamp.from(Instant.now()))
+                    ps.executeUpdate()
+                }
+            } else {
+                conn.prepareStatement("DELETE FROM content.story_likes WHERE story_id = ? AND user_id = ?").use { ps ->
+                    ps.setObject(1, UUID.fromString(storyId))
+                    ps.setObject(2, UUID.fromString(userId))
+                    ps.executeUpdate()
+                }
+            }
+        }
+    }
+
+    override fun countStoryLikes(storyId: String): Long = ds.connection.use { conn ->
+        conn.prepareStatement("SELECT COUNT(*) FROM content.story_likes WHERE story_id = ?").use { ps ->
+            ps.setObject(1, UUID.fromString(storyId))
+            ps.executeQuery().use { rs -> if (rs.next()) rs.getLong(1) else 0 }
+        }
+    }
+
+    override fun isStoryLikedBy(storyId: String, userId: String): Boolean = ds.connection.use { conn ->
+        conn.prepareStatement("SELECT 1 FROM content.story_likes WHERE story_id = ? AND user_id = ?").use { ps ->
+            ps.setObject(1, UUID.fromString(storyId))
+            ps.setObject(2, UUID.fromString(userId))
+            ps.executeQuery().use { rs -> rs.next() }
+        }
+    }
+
     override fun saveStory(story: Story): Story {
         ds.connection.use { conn ->
             conn.autoCommit = false
@@ -162,11 +202,10 @@ class JdbcContentRepository(private val ds: DataSource) : ContentRepository {
         conn.prepareStatement(
             """
             SELECT id, author_id, visibility, status, created_at, expires_at
-            FROM content.stories WHERE id = ? AND status = 'ACTIVE' AND expires_at > ?
+            FROM content.stories WHERE id = ? AND status <> 'DELETED'
             """.trimIndent()
         ).use { ps ->
             ps.setObject(1, UUID.fromString(id))
-            ps.setTimestamp(2, Timestamp.from(Instant.now()))
             ps.executeQuery().use { rs -> if (rs.next()) mapStory(conn, rs) else null }
         }
     }
@@ -203,6 +242,59 @@ class JdbcContentRepository(private val ds: DataSource) : ContentRepository {
                 ps.executeQuery().use { rs -> rs.rows { mapStory(conn, rs) } }
             }
         }
+
+    override fun listArchivedStoriesByAuthor(authorId: String, now: Instant, limit: Int, cursor: Instant?): List<Story> =
+        ds.connection.use { conn ->
+            conn.prepareStatement(
+                """
+                SELECT id, author_id, visibility, status, created_at, expires_at
+                FROM content.stories
+                WHERE author_id = ?
+                  AND status <> 'DELETED'
+                  AND (status = 'ARCHIVED' OR expires_at <= ?)
+                  AND (?::timestamptz IS NULL OR created_at < ?)
+                ORDER BY created_at DESC LIMIT ?
+                """.trimIndent()
+            ).use { ps ->
+                ps.setObject(1, UUID.fromString(authorId))
+                ps.setTimestamp(2, Timestamp.from(now))
+                if (cursor == null) {
+                    ps.setNull(3, Types.TIMESTAMP_WITH_TIMEZONE)
+                    ps.setNull(4, Types.TIMESTAMP_WITH_TIMEZONE)
+                } else {
+                    val ts = Timestamp.from(cursor)
+                    ps.setTimestamp(3, ts)
+                    ps.setTimestamp(4, ts)
+                }
+                ps.setInt(5, limit)
+                ps.executeQuery().use { rs -> rs.rows { mapStory(conn, rs) } }
+            }
+        }
+
+    override fun recordStoryView(storyId: String, userId: String, viewedAt: Instant) {
+        ds.connection.use { conn ->
+            conn.prepareStatement(
+                """
+                INSERT INTO content.story_views (story_id, user_id, viewed_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT (story_id, user_id) DO UPDATE SET viewed_at = EXCLUDED.viewed_at
+                """.trimIndent()
+            ).use { ps ->
+                ps.setObject(1, UUID.fromString(storyId))
+                ps.setObject(2, UUID.fromString(userId))
+                ps.setTimestamp(3, Timestamp.from(viewedAt))
+                ps.executeUpdate()
+            }
+        }
+    }
+
+    override fun isStoryViewed(storyId: String, userId: String): Boolean = ds.connection.use { conn ->
+        conn.prepareStatement("SELECT 1 FROM content.story_views WHERE story_id = ? AND user_id = ?").use { ps ->
+            ps.setObject(1, UUID.fromString(storyId))
+            ps.setObject(2, UUID.fromString(userId))
+            ps.executeQuery().use { rs -> rs.next() }
+        }
+    }
 
     override fun saveComment(comment: Comment): Comment {
         ds.connection.use { conn ->

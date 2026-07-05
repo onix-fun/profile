@@ -24,6 +24,7 @@ import io.ktor.websocket.close
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
 import java.time.Duration
+import java.time.Instant
 
 private val json = Json { ignoreUnknownKeys = true; explicitNulls = false; encodeDefaults = true }
 
@@ -219,11 +220,34 @@ private fun dispatchGraphQl(
         }
         "story" -> buildJsonObject {
             val id = variables["id"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("id is required")
-            put("story", json.encodeToJsonElement(content.story(id)))
+            put("story", json.encodeToJsonElement(content.story(id, user.id)))
         }
         "storiesFeed" -> buildJsonObject {
             val limit = variables["limit"]?.jsonPrimitive?.intOrNull ?: 40
-            put("storiesFeed", json.encodeToJsonElement(content.storiesFeed(user.id, limit)))
+            val resolver = authorResolver(user, account, token)
+            val visibilityResolver = visibilityResolver(user, account, token)
+            put("storiesFeed", json.encodeToJsonElement(content.storiesFeed(user.id, limit, resolver, visibilityResolver)))
+        }
+        "storyGroup" -> buildJsonObject {
+            val authorId = variables["authorId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("authorId is required")
+            val startStoryId = variables["startStoryId"]?.jsonPrimitive?.contentOrNull
+            val archive = variables["archive"]?.jsonPrimitive?.booleanOrNull ?: false
+            put("storyGroup", json.encodeToJsonElement(content.storyGroup(
+                viewerId = user.id,
+                authorId = authorId,
+                startStoryId = startStoryId,
+                authorResolver = authorResolver(user, account, token),
+                visibilityResolver = visibilityResolver(user, account, token),
+                archive = archive
+            )))
+        }
+        "storyArchive" -> buildJsonObject {
+            val ownerId = variables["ownerId"]?.jsonPrimitive?.content ?: user.id
+            val limit = variables["limit"]?.jsonPrimitive?.intOrNull ?: 40
+            val cursor = variables["cursor"]?.jsonPrimitive?.contentOrNull?.let(Instant::parse)
+            val owner = authorResolver(user, account, token)(ownerId)
+            val visibility = visibilityResolver(user, account, token)(ownerId)
+            put("storyArchive", json.encodeToJsonElement(content.storyArchive(ownerId, visibility, owner, limit, cursor)))
         }
         "comments" -> buildJsonObject {
             val postId = variables["postId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("postId is required")
@@ -244,8 +268,20 @@ private fun dispatchGraphQl(
             val postId = variables["postId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("postId is required")
             put("unlikePost", json.encodeToJsonElement(content.unlikePost(user, postId)))
         }
-        "recordView", "recordStoryView" -> buildJsonObject {
+        "likeStory" -> buildJsonObject {
+            val storyId = variables["storyId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("storyId is required")
+            put("likeStory", json.encodeToJsonElement(content.likeStory(user, storyId)))
+        }
+        "unlikeStory" -> buildJsonObject {
+            val storyId = variables["storyId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("storyId is required")
+            put("unlikeStory", json.encodeToJsonElement(content.unlikeStory(user, storyId)))
+        }
+        "recordView" -> buildJsonObject {
             put(operation, true)
+        }
+        "recordStoryView" -> buildJsonObject {
+            val storyId = variables["storyId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("storyId is required")
+            put("recordStoryView", JsonPrimitive(content.recordStoryView(user, storyId)))
         }
         else -> throw IllegalArgumentException("Unsupported GraphQL operation: ${operation ?: "unknown"}")
     }
@@ -254,8 +290,39 @@ private fun dispatchGraphQl(
 
 private fun operationFromQuery(query: String?): String? {
     if (query.isNullOrBlank()) return null
-    return listOf("createPost", "createStory", "createComment", "feed", "post", "story", "storiesFeed", "comments", "profileContent", "likePost", "unlikePost", "recordView", "recordStoryView")
+    return listOf("createPost", "createStory", "createComment", "feed", "post", "storyGroup", "storyArchive", "story", "storiesFeed", "comments", "profileContent", "likePost", "unlikePost", "likeStory", "unlikeStory", "recordView", "recordStoryView")
         .firstOrNull { query.contains(it) }
+}
+
+private fun authorResolver(user: SessionUser, account: AccountClient?, token: String?): (String) -> AccountUser? {
+    val cache = mutableMapOf<String, AccountUser?>()
+    return { authorId ->
+        cache.getOrPut(authorId) {
+            if (authorId == user.id) {
+                AccountUser(
+                    id = user.id,
+                    username = user.username,
+                    firstName = user.firstName,
+                    lastName = user.lastName,
+                    avatarUrl = user.avatarUrl
+                )
+            } else if (account != null && token != null) {
+                account.getUser(authorId, token)
+            } else {
+                null
+            }
+        }
+    }
+}
+
+private fun visibilityResolver(user: SessionUser, account: AccountClient?, token: String?): (String) -> AccountVisibility {
+    val cache = mutableMapOf<String, AccountVisibility>()
+    return { ownerId ->
+        cache.getOrPut(ownerId) {
+            if (account != null && token != null) account.visibility(ownerId, user.id, token)
+            else AccountVisibility(ownerId = ownerId, viewerId = user.id)
+        }
+    }
 }
 
 private fun <T> decodeInput(variables: JsonObject, serializer: kotlinx.serialization.KSerializer<T>): T {
