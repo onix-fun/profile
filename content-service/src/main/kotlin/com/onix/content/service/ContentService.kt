@@ -77,7 +77,8 @@ class ContentService(
             return ProfileContentResponse()
         }
         val now = Instant.now(clock)
-        val posts = repository.listPostsByAuthor(ownerId, postLimit.coerceIn(1, 100))
+        val posts = repository.listPostsByAuthor(ownerId, postLimit.coerceIn(1, 500))
+            .map { withViewerState(it, visibility.viewerId) }
         val stories = repository.listActiveStoriesByAuthor(ownerId, now, storyLimit.coerceIn(1, 50))
             .filter { canViewStory(it, visibility) }
         val comments = posts.flatMap { repository.listCommentsForPost(it.id, 3) }
@@ -86,16 +87,19 @@ class ContentService(
 
     fun feed(viewerId: String, tagAffinity: Set<String>, limit: Int): List<FeedItem> {
         return repository.listRecentPosts(limit.coerceIn(1, 100) * 3)
+            .map { withViewerState(it, viewerId) }
             .map { post ->
                 val tagScore = post.tags.count { it in tagAffinity } * 4.0
+                val likeScore = post.likeCount.coerceAtMost(30) * 0.15
                 val ageHours = java.time.Duration.between(post.createdAt, Instant.now(clock)).toHours().coerceAtLeast(0)
                 val recencyScore = 1.0 / (1 + ageHours).toDouble()
                 val ownPenalty = if (post.authorId == viewerId) -2.0 else 0.0
                 FeedItem(
                     post = post,
-                    score = tagScore + recencyScore + ownPenalty,
+                    score = tagScore + likeScore + recencyScore + ownPenalty,
                     reasons = buildList {
                         if (tagScore > 0) add("tag-affinity")
+                        if (post.likeCount > 0) add("liked")
                         add("recent")
                     }
                 )
@@ -104,7 +108,20 @@ class ContentService(
             .take(limit.coerceIn(1, 100))
     }
 
-    fun post(id: String): Post? = repository.findPost(id)
+    fun post(id: String, viewerId: String? = null): Post? =
+        repository.findPost(id)?.let { withViewerState(it, viewerId) }
+
+    fun likePost(user: SessionUser, postId: String): PostReactionState {
+        repository.findPost(postId) ?: throw IllegalArgumentException("Post not found")
+        repository.setPostLike(postId, user.id, true)
+        return PostReactionState(postId = postId, liked = true, likeCount = repository.countPostLikes(postId))
+    }
+
+    fun unlikePost(user: SessionUser, postId: String): PostReactionState {
+        repository.findPost(postId) ?: throw IllegalArgumentException("Post not found")
+        repository.setPostLike(postId, user.id, false)
+        return PostReactionState(postId = postId, liked = false, likeCount = repository.countPostLikes(postId))
+    }
 
     fun story(id: String): Story? = repository.findStory(id)
 
@@ -140,4 +157,10 @@ class ContentService(
             Visibility.CLOSE_FRIENDS -> visibility.isCloseFriend
         }
     }
+
+    private fun withViewerState(post: Post, viewerId: String?): Post =
+        post.copy(
+            likeCount = repository.countPostLikes(post.id),
+            likedByViewer = viewerId?.let { repository.isPostLikedBy(post.id, it) } ?: false
+        )
 }

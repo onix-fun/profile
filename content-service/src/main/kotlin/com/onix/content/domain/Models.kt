@@ -76,6 +76,8 @@ data class Post(
     val tags: List<String> = emptyList(),
     val visibility: Visibility = Visibility.PUBLIC,
     val status: ContentStatus = ContentStatus.ACTIVE,
+    val likeCount: Long = 0,
+    val likedByViewer: Boolean = false,
     @Serializable(with = InstantIsoSerializer::class)
     val createdAt: Instant = Instant.now(),
     @Serializable(with = InstantIsoSerializer::class)
@@ -114,6 +116,13 @@ data class FeedItem(
     val post: Post,
     val score: Double,
     val reasons: List<String> = emptyList()
+)
+
+@Serializable
+data class PostReactionState(
+    val postId: String,
+    val liked: Boolean,
+    val likeCount: Long
 )
 
 @Serializable

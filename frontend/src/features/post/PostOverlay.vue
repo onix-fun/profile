@@ -13,6 +13,7 @@ const comments = ref<CommentItem[]>([]);
 const commentText = ref("");
 const replyDraft = ref<Record<string, string>>({});
 const isLoading = ref(true);
+const isTogglingLike = ref(false);
 
 const postId = computed(() => String(route.params.postId || ""));
 
@@ -42,6 +43,25 @@ function blockText(block: ContentBlock): string {
 
 function blockSource(block: ContentBlock): string {
   return ContentService.mediaSource(block);
+}
+
+async function toggleLike() {
+  if (!post.value || isTogglingLike.value) return;
+  isTogglingLike.value = true;
+  try {
+    const next = post.value.likedByViewer
+      ? await ContentService.unlikePost(post.value.id)
+      : await ContentService.likePost(post.value.id);
+    post.value = {
+      ...post.value,
+      likedByViewer: next.liked,
+      likeCount: next.likeCount,
+    };
+  } catch (error) {
+    toast.add({ severity: "error", summary: "Like", detail: error instanceof Error ? error.message : "Unable to update like", life: 5000 });
+  } finally {
+    isTogglingLike.value = false;
+  }
 }
 
 async function sendComment(parentId?: string) {
@@ -82,6 +102,16 @@ async function sendComment(parentId?: string) {
         <header class="post-header">
           <h1 v-if="post.title">{{ post.title }}</h1>
           <p>{{ post.text }}</p>
+          <button
+            type="button"
+            class="like-button"
+            :class="{ active: post.likedByViewer }"
+            :disabled="isTogglingLike"
+            @click="toggleLike"
+          >
+            <i :class="post.likedByViewer ? 'pi pi-heart-fill' : 'pi pi-heart'"></i>
+            <span>{{ post.likeCount || 0 }}</span>
+          </button>
         </header>
 
         <div class="post-blocks">
@@ -172,6 +202,33 @@ async function sendComment(parentId?: string) {
   display: grid;
   gap: 8px;
   padding-right: 46px;
+}
+
+.like-button {
+  width: max-content;
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  padding: 0 14px;
+  background: #ffffff;
+  color: #111827;
+  font: inherit;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.like-button.active {
+  border-color: rgba(225, 29, 72, 0.24);
+  color: #e11d48;
+  background: #fff1f2;
+}
+
+.like-button:disabled {
+  cursor: default;
+  opacity: 0.68;
 }
 
 .post-header span,

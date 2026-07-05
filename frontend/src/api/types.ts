@@ -47,9 +47,13 @@ export interface AccountProfile {
 
 export interface ProfileContentPost {
   id: string;
+  authorId?: string | null;
   title?: string | null;
   text: string;
+  blocks?: ContentBlock[];
   tags: string[];
+  likeCount?: number;
+  likedByViewer?: boolean;
   createdAt?: string | null;
 }
 
@@ -69,6 +73,11 @@ export interface ProfileContentComment {
 export interface ProfileCanvasResponse {
   status: "OK" | "BLOCKED";
   profile?: AccountProfile | null;
+  content?: {
+    posts: ProfileContentPost[];
+    stories: ProfileContentStory[];
+    comments: ProfileContentComment[];
+  };
   relationship?: Relationship | null;
   nodes: CanvasNode[];
   edges: CanvasEdge[];
@@ -103,6 +112,12 @@ export interface FeedItem {
   };
   score: number;
   reasons: string[];
+}
+
+export interface PostReactionState {
+  postId: string;
+  liked: boolean;
+  likeCount: number;
 }
 
 export interface CanvasPostNode {

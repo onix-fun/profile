@@ -7,6 +7,7 @@ import type {
   CreatePostInput,
   CreateStoryInput,
   FeedItem,
+  PostReactionState,
   Story,
   StoryBlock,
   StoryRailItem,
@@ -127,13 +128,13 @@ export class ContentService {
     };
   }
 
-  static async likePost(postId: string): Promise<boolean> {
-    const data = await request<{ likePost: boolean }>("likePost", { postId });
+  static async likePost(postId: string): Promise<PostReactionState> {
+    const data = await request<{ likePost: PostReactionState }>("likePost", { postId });
     return data.likePost;
   }
 
-  static async unlikePost(postId: string): Promise<boolean> {
-    const data = await request<{ unlikePost: boolean }>("unlikePost", { postId });
+  static async unlikePost(postId: string): Promise<PostReactionState> {
+    const data = await request<{ unlikePost: PostReactionState }>("unlikePost", { postId });
     return data.unlikePost;
   }
 

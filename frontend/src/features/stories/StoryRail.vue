@@ -26,29 +26,31 @@ function openStory(item: StoryRailItem) {
 
 <template>
   <section class="story-rail" aria-label="Stories">
-    <RouterLink class="story-pill story-pill--create" to="/story/new" aria-label="Create story">
-      <span class="story-ring">
-        <i class="pi pi-plus"></i>
-      </span>
-      <strong>Create</strong>
-    </RouterLink>
+    <div class="story-track">
+      <RouterLink class="story-pill story-pill--create" to="/story/new" aria-label="Create story">
+        <span class="story-ring">
+          <i class="pi pi-plus"></i>
+        </span>
+        <strong>Create</strong>
+      </RouterLink>
 
-    <button
-      v-for="item in stories"
-      :key="item.authorId"
-      type="button"
-      class="story-pill"
-      :class="{ 'story-pill--seen': item.seen, 'story-pill--close': item.closeFriends }"
-      @click="openStory(item)"
-    >
-      <span class="story-ring">
-        <img v-if="item.avatarUrl" :src="item.avatarUrl" alt="" />
-        <span v-else>{{ item.authorName.slice(0, 1).toUpperCase() }}</span>
-      </span>
-      <strong>{{ item.authorName.replace(/^@/, "") }}</strong>
-    </button>
+      <button
+        v-for="item in stories"
+        :key="item.authorId"
+        type="button"
+        class="story-pill"
+        :class="{ 'story-pill--seen': item.seen, 'story-pill--close': item.closeFriends }"
+        @click="openStory(item)"
+      >
+        <span class="story-ring">
+          <img v-if="item.avatarUrl" :src="item.avatarUrl" alt="" />
+          <span v-else>{{ item.authorName.slice(0, 1).toUpperCase() }}</span>
+        </span>
+        <strong>{{ item.authorName.replace(/^@/, "") }}</strong>
+      </button>
 
-    <span v-if="isLoading" class="story-loading">Loading stories</span>
+      <span v-if="isLoading" class="story-loading">Loading stories</span>
+    </div>
   </section>
 </template>
 
@@ -56,20 +58,38 @@ function openStory(item: StoryRailItem) {
 .story-rail {
   position: fixed;
   z-index: 70;
-  top: 74px;
+  top: 0;
   left: 0;
   right: 0;
-  display: flex;
-  gap: 14px;
-  align-items: center;
   overflow-x: auto;
-  padding: 8px clamp(18px, 3vw, 42px) 12px;
-  scrollbar-width: none;
+  overflow-y: hidden;
+  padding-block: max(10px, env(safe-area-inset-top)) 12px;
+  scrollbar-color: rgba(15, 23, 42, 0.24) transparent;
+  scrollbar-width: thin;
   pointer-events: auto;
 }
 
 .story-rail::-webkit-scrollbar {
-  display: none;
+  height: 6px;
+}
+
+.story-rail::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.story-rail::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.24);
+}
+
+.story-track {
+  width: max-content;
+  box-sizing: border-box;
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  margin-inline: auto;
+  padding-inline: 20px;
 }
 
 .story-pill {
@@ -149,9 +169,18 @@ function openStory(item: StoryRailItem) {
 
 @media (max-width: 720px) {
   .story-rail {
-    top: 68px;
+    top: 0;
+    padding-block: max(8px, env(safe-area-inset-top)) 10px;
+    scrollbar-width: none;
+  }
+
+  .story-rail::-webkit-scrollbar {
+    display: none;
+  }
+
+  .story-track {
     gap: 10px;
-    padding-inline: 14px;
+    padding-inline: 20px;
   }
 
   .story-pill {

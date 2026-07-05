@@ -215,7 +215,7 @@ private fun dispatchGraphQl(
         }
         "post" -> buildJsonObject {
             val id = variables["id"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("id is required")
-            put("post", json.encodeToJsonElement(content.post(id)))
+            put("post", json.encodeToJsonElement(content.post(id, user.id)))
         }
         "story" -> buildJsonObject {
             val id = variables["id"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("id is required")
@@ -236,7 +236,15 @@ private fun dispatchGraphQl(
             else AccountVisibility(ownerId = ownerId, viewerId = user.id)
             put("profileContent", json.encodeToJsonElement(content.profileContent(ownerId, visibility, 12, 8)))
         }
-        "likePost", "unlikePost", "recordView", "recordStoryView" -> buildJsonObject {
+        "likePost" -> buildJsonObject {
+            val postId = variables["postId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("postId is required")
+            put("likePost", json.encodeToJsonElement(content.likePost(user, postId)))
+        }
+        "unlikePost" -> buildJsonObject {
+            val postId = variables["postId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("postId is required")
+            put("unlikePost", json.encodeToJsonElement(content.unlikePost(user, postId)))
+        }
+        "recordView", "recordStoryView" -> buildJsonObject {
             put(operation, true)
         }
         else -> throw IllegalArgumentException("Unsupported GraphQL operation: ${operation ?: "unknown"}")

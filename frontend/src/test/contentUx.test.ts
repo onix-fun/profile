@@ -180,7 +180,7 @@ describe("route auth guard", () => {
 });
 
 describe("app shell", () => {
-  it("renders logo and avatar menu navigation", async () => {
+  it("hides the home logo and renders avatar menu navigation", async () => {
     vi.mocked(ProfileService.session).mockResolvedValue({
       id: "1",
       username: "alice",
@@ -205,9 +205,67 @@ describe("app shell", () => {
     await Promise.resolve();
     await wrapper.find(".avatar-menu-button").trigger("click");
 
-    expect(wrapper.text()).toContain("Onix");
+    expect(wrapper.find(".brand-mark").exists()).toBe(false);
     expect(wrapper.text()).not.toContain("Guest");
+    expect(wrapper.text()).toContain("Feed");
     expect(wrapper.text()).toContain("Create post");
     expect(wrapper.text()).toContain("Create story");
+    expect(wrapper.text()).not.toContain("Settings");
+    expect(wrapper.text()).not.toContain("Logout");
+  });
+
+  it("keeps the logo on secondary app routes", async () => {
+    vi.mocked(ProfileService.session).mockResolvedValue({
+      id: "1",
+      username: "alice",
+      firstName: "Alice",
+      avatarUrl: null,
+    });
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: "/", component: { template: "<div />" } },
+        { path: "/search", component: { template: "<div />" } },
+      ],
+    });
+    router.push("/search");
+    await router.isReady();
+
+    const wrapper = mount(AppShell, {
+      global: { plugins: [router] },
+      slots: { default: "<div>search</div>" },
+    });
+    await Promise.resolve();
+
+    expect(wrapper.find(".brand-mark").exists()).toBe(true);
+    expect(wrapper.text()).toContain("Onix");
+  });
+
+  it("hides shell chrome on focused creation routes", async () => {
+    vi.mocked(ProfileService.session).mockResolvedValue({
+      id: "1",
+      username: "alice",
+      firstName: "Alice",
+      avatarUrl: null,
+    });
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: "/post/new", name: "CreatePost", component: { template: "<div />" } },
+        { path: "/story/new", name: "CreateStory", component: { template: "<div />" } },
+      ],
+    });
+    router.push("/post/new");
+    await router.isReady();
+
+    const wrapper = mount(AppShell, {
+      global: { plugins: [router] },
+      slots: { default: "<div>editor</div>" },
+    });
+    await Promise.resolve();
+
+    expect(wrapper.find(".brand-mark").exists()).toBe(false);
+    expect(wrapper.find(".avatar-menu-button").exists()).toBe(false);
+    expect(wrapper.text()).toContain("editor");
   });
 });

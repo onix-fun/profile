@@ -29,6 +29,13 @@ data class BirthdayParts(val day: Int, val month: Int)
 data class SocialLink(val label: String, val url: String)
 
 @Serializable
+data class ContentBlock(
+    val id: String? = null,
+    val type: String,
+    val data: JsonObject = JsonObject(emptyMap())
+)
+
+@Serializable
 data class AccountProfile(
     val id: String,
     val username: String,
@@ -47,9 +54,13 @@ data class AccountProfile(
 @Serializable
 data class ProfileContentPost(
     val id: String,
+    val authorId: String? = null,
     val title: String? = null,
     val text: String = "",
+    val blocks: List<ContentBlock> = emptyList(),
     val tags: List<String> = emptyList(),
+    val likeCount: Long = 0,
+    val likedByViewer: Boolean = false,
     val createdAt: String? = null
 )
 
@@ -110,6 +121,7 @@ data class ProfilePermissions(
 data class ProfileCanvasResponse(
     val status: String,
     val profile: AccountProfile? = null,
+    val content: ProfileContentSummary = ProfileContentSummary(),
     val relationship: Relationship? = null,
     val nodes: List<CanvasNode> = emptyList(),
     val edges: List<CanvasEdge> = emptyList(),

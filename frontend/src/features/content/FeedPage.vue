@@ -14,15 +14,11 @@ const toast = useToast();
 const feed = ref<FeedItem[]>([]);
 const isLoading = ref(true);
 const loadError = ref("");
-const zoom = ref(1);
-const selectedTags = ref<string[]>([]);
-const tagText = ref("");
 
 const nodes = computed<CanvasPostNode[]>(() => buildFeedCanvasNodes(feed.value));
 const stageStyle = computed(() => ({
   width: `${CANVAS_SIZE}px`,
   height: `${CANVAS_SIZE}px`,
-  transform: `scale(${zoom.value})`,
 }));
 
 onMounted(async () => {
@@ -39,7 +35,7 @@ async function loadFeed() {
   isLoading.value = true;
   loadError.value = "";
   try {
-    feed.value = await ContentService.feed(selectedTags.value, 42);
+    feed.value = await ContentService.feed([], 42);
   } catch (error) {
     loadError.value = error instanceof Error ? error.message : "Unable to load feed";
     toast.add({ severity: "error", summary: "Feed", detail: loadError.value, life: 5000 });
@@ -48,23 +44,9 @@ async function loadFeed() {
   }
 }
 
-function applyTags() {
-  selectedTags.value = tagText.value.split(/[,\s]+/).map((tag) => tag.replace(/^#/, "").toLowerCase()).filter(Boolean);
-  void loadFeed();
-}
-
 function openPost(node: CanvasPostNode) {
   rememberCanvasPosition();
   void router.push(`/p/${encodeURIComponent(node.id)}`);
-}
-
-function openCreatePost() {
-  rememberCanvasPosition();
-  void router.push("/post/new");
-}
-
-function setZoom(next: number) {
-  zoom.value = Math.min(1.35, Math.max(0.62, Number(next.toFixed(2))));
 }
 
 function rememberCanvasPosition() {
@@ -72,7 +54,6 @@ function rememberCanvasPosition() {
   sessionStorage.setItem("feedCanvas", JSON.stringify({
     left: viewport.value.scrollLeft,
     top: viewport.value.scrollTop,
-    zoom: zoom.value,
   }));
 }
 
@@ -82,8 +63,7 @@ function restoreCanvasPosition() {
   const saved = sessionStorage.getItem("feedCanvas");
   if (saved) {
     try {
-      const state = JSON.parse(saved) as { left?: number; top?: number; zoom?: number };
-      zoom.value = state.zoom || zoom.value;
+      const state = JSON.parse(saved) as { left?: number; top?: number };
       element.scrollLeft = state.left || 0;
       element.scrollTop = state.top || 0;
       return;
@@ -116,22 +96,6 @@ function nodeText(node: CanvasPostNode): string {
   <section class="feed-shell" aria-label="Canvas feed">
     <StoryRail />
 
-    <div class="feed-controls" aria-label="Feed controls">
-      <input v-model="tagText" type="search" placeholder="tags or topics" @keyup.enter="applyTags" />
-      <button type="button" aria-label="Apply tags" @click="applyTags"><i class="pi pi-search"></i></button>
-    </div>
-
-    <button type="button" class="create-post-fab" aria-label="Create post" @click="openCreatePost">
-      <i class="pi pi-plus"></i>
-      <span>Post</span>
-    </button>
-
-    <div class="zoom-controls" aria-label="Canvas zoom controls">
-      <button type="button" aria-label="Zoom out" @click="setZoom(zoom - 0.12)"><i class="pi pi-minus"></i></button>
-      <span>{{ Math.round(zoom * 100) }}%</span>
-      <button type="button" aria-label="Zoom in" @click="setZoom(zoom + 0.12)"><i class="pi pi-plus"></i></button>
-    </div>
-
     <div ref="viewport" class="canvas-viewport">
       <div class="canvas-stage" :style="stageStyle">
         <div class="canvas-origin">
@@ -160,7 +124,7 @@ function nodeText(node: CanvasPostNode): string {
           </span>
           <span class="post-meta">
             <span v-for="tag in node.item.post.tags.slice(0, 3)" :key="tag">#{{ tag }}</span>
-            <small><i class="pi pi-heart"></i>{{ Math.max(1, Math.round(node.item.score)) }}</small>
+            <small><i :class="node.item.post.likedByViewer ? 'pi pi-heart-fill' : 'pi pi-heart'"></i>{{ node.item.post.likeCount || 0 }}</small>
           </span>
         </button>
       </div>
@@ -176,8 +140,7 @@ function nodeText(node: CanvasPostNode): string {
     <div v-else-if="nodes.length === 0" class="feed-state feed-state-panel">
       <i class="pi pi-sparkles"></i>
       <strong>No posts yet</strong>
-      <span>Create the first post or adjust the tag filter.</span>
-      <button type="button" @click="openCreatePost"><i class="pi pi-plus"></i>Create post</button>
+      <span>Create the first post from the account menu.</span>
     </div>
   </section>
 </template>
@@ -227,94 +190,6 @@ function nodeText(node: CanvasPostNode): string {
 .canvas-origin strong {
   color: rgba(15, 23, 42, 0.62);
   font-size: 16px;
-}
-
-.feed-controls {
-  position: fixed;
-  z-index: 72;
-  left: 50%;
-  top: 26px;
-  display: flex;
-  width: min(330px, calc(100vw - 160px));
-  transform: translateX(-50%);
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.74);
-  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.08);
-  backdrop-filter: blur(18px);
-}
-
-.feed-controls input {
-  min-width: 0;
-  flex: 1;
-  border: 0;
-  padding: 0 16px;
-  background: transparent;
-  color: #111827;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 800;
-  outline: 0;
-}
-
-.feed-controls button,
-.zoom-controls button,
-.create-post-fab {
-  border: 0;
-  color: #ffffff;
-  background: #111827;
-  cursor: pointer;
-}
-
-.feed-controls button {
-  width: 42px;
-  height: 42px;
-  border-radius: 999px;
-}
-
-.create-post-fab {
-  position: fixed;
-  z-index: 72;
-  right: clamp(18px, 3vw, 42px);
-  bottom: 28px;
-  height: 48px;
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  border-radius: 999px;
-  padding: 0 18px;
-  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.22);
-  font-weight: 900;
-}
-
-.zoom-controls {
-  position: fixed;
-  z-index: 72;
-  left: clamp(18px, 3vw, 42px);
-  bottom: 28px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px;
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.78);
-  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.1);
-  backdrop-filter: blur(18px);
-}
-
-.zoom-controls button {
-  width: 34px;
-  height: 34px;
-  border-radius: 999px;
-}
-
-.zoom-controls span {
-  min-width: 48px;
-  color: #111827;
-  font-size: 12px;
-  font-weight: 900;
-  text-align: center;
 }
 
 .canvas-post {
@@ -453,23 +328,4 @@ function nodeText(node: CanvasPostNode): string {
   cursor: pointer;
 }
 
-@media (max-width: 760px) {
-  .feed-controls {
-    top: auto;
-    left: 14px;
-    right: 14px;
-    bottom: 84px;
-    width: auto;
-    transform: none;
-  }
-
-  .zoom-controls {
-    bottom: 22px;
-  }
-
-  .create-post-fab {
-    right: 14px;
-    bottom: 20px;
-  }
-}
 </style>

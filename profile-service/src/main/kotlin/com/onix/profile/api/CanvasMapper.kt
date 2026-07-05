@@ -60,6 +60,7 @@ object CanvasMapper {
         return ProfileCanvasResponse(
             status = "OK",
             profile = profile,
+            content = content,
             relationship = profile.relationship,
             nodes = nodes,
             edges = edges,

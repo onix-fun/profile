@@ -16,7 +16,7 @@ class ContentClient(private val apiBaseUrl: String?) {
     fun profileContent(ownerId: String, accessToken: String): ProfileContentSummary {
         val base = apiBaseUrl ?: return ProfileContentSummary()
         val encoded = URLEncoder.encode(ownerId, StandardCharsets.UTF_8)
-        val request = HttpRequest.newBuilder(URI.create("$base/users/$encoded/content?postLimit=12&storyLimit=8"))
+        val request = HttpRequest.newBuilder(URI.create("$base/users/$encoded/content?postLimit=500&storyLimit=8"))
             .header("Accept", "application/json")
             .header("Authorization", "Bearer $accessToken")
             .GET()

@@ -77,6 +77,24 @@ class ContentServiceTest {
         assertTrue(feed.first().reasons.contains("tag-affinity"))
     }
 
+    @Test
+    fun `post likes are idempotent and returned with viewer state`() {
+        val service = service()
+        val post = service.createPost(user, CreatePostInput(text = "Likeable"))
+
+        val liked = service.likePost(viewer, post.id)
+        service.likePost(viewer, post.id)
+        val loaded = service.post(post.id, viewer.id)
+        val unliked = service.unlikePost(viewer, post.id)
+
+        assertTrue(liked.liked)
+        assertEquals(1L, liked.likeCount)
+        assertEquals(1L, loaded?.likeCount)
+        assertEquals(true, loaded?.likedByViewer)
+        assertEquals(false, unliked.liked)
+        assertEquals(0L, unliked.likeCount)
+    }
+
     private fun service() = ContentService(
         repository = InMemoryContentRepository(),
         clock = Clock.fixed(Instant.parse("2026-07-05T00:00:00Z"), ZoneOffset.UTC)

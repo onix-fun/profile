@@ -88,6 +88,46 @@ class JdbcContentRepository(private val ds: DataSource) : ContentRepository {
         }
     }
 
+    override fun setPostLike(postId: String, userId: String, liked: Boolean) {
+        ds.connection.use { conn ->
+            if (liked) {
+                conn.prepareStatement(
+                    """
+                    INSERT INTO content.post_likes (post_id, user_id, created_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT (post_id, user_id) DO NOTHING
+                    """.trimIndent()
+                ).use { ps ->
+                    ps.setObject(1, UUID.fromString(postId))
+                    ps.setObject(2, UUID.fromString(userId))
+                    ps.setTimestamp(3, Timestamp.from(Instant.now()))
+                    ps.executeUpdate()
+                }
+            } else {
+                conn.prepareStatement("DELETE FROM content.post_likes WHERE post_id = ? AND user_id = ?").use { ps ->
+                    ps.setObject(1, UUID.fromString(postId))
+                    ps.setObject(2, UUID.fromString(userId))
+                    ps.executeUpdate()
+                }
+            }
+        }
+    }
+
+    override fun countPostLikes(postId: String): Long = ds.connection.use { conn ->
+        conn.prepareStatement("SELECT COUNT(*) FROM content.post_likes WHERE post_id = ?").use { ps ->
+            ps.setObject(1, UUID.fromString(postId))
+            ps.executeQuery().use { rs -> if (rs.next()) rs.getLong(1) else 0 }
+        }
+    }
+
+    override fun isPostLikedBy(postId: String, userId: String): Boolean = ds.connection.use { conn ->
+        conn.prepareStatement("SELECT 1 FROM content.post_likes WHERE post_id = ? AND user_id = ?").use { ps ->
+            ps.setObject(1, UUID.fromString(postId))
+            ps.setObject(2, UUID.fromString(userId))
+            ps.executeQuery().use { rs -> rs.next() }
+        }
+    }
+
     override fun saveStory(story: Story): Story {
         ds.connection.use { conn ->
             conn.autoCommit = false

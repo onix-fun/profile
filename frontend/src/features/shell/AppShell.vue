@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { RouterLink, useRouter } from "vue-router";
+import { RouterLink, useRoute, useRouter } from "vue-router";
 import { ProfileService } from "@/api/profileService";
-import { runtimeConfig } from "@/runtime-config";
 import type { SessionUser } from "@/api/types";
 
 const router = useRouter();
+const route = useRoute();
 const user = ref<SessionUser | null>(null);
 const menuOpen = ref(false);
 
@@ -13,9 +13,8 @@ const initials = computed(() => {
   const source = user.value?.firstName || user.value?.username || "U";
   return source.slice(0, 1).toUpperCase();
 });
-const settingsHref = computed(() => (
-  `${runtimeConfig.accountFrontendUrl}/settings?redirect=${encodeURIComponent(window.location.href)}`
-));
+const chromeHidden = computed(() => route.name === "CreatePost" || route.name === "CreateStory");
+const headerVisible = computed(() => !chromeHidden.value && route.path !== "/");
 
 onMounted(async () => {
   user.value = await ProfileService.session();
@@ -34,35 +33,31 @@ function openCreateStory() {
   closeMenu();
   void router.push("/story/new");
 }
-
-function logout() {
-  window.location.assign(`${runtimeConfig.accountFrontendUrl}/?logout=1&redirect=${encodeURIComponent(window.location.href)}`);
-}
 </script>
 
 <template>
   <div class="app-shell" @keydown.esc="closeMenu">
-    <header class="app-header" aria-label="Main navigation">
+    <header v-if="headerVisible" class="app-header" aria-label="Main navigation">
       <RouterLink class="brand-mark" to="/" aria-label="Open feed">
-        <span class="brand-symbol">O</span>
         <span class="brand-word">Onix</span>
       </RouterLink>
-
-      <button
-        class="avatar-menu-button"
-        type="button"
-        aria-label="Open menu"
-        :aria-expanded="menuOpen"
-        @click="menuOpen = !menuOpen"
-      >
-        <img v-if="user?.avatarUrl" :src="user.avatarUrl" alt="" />
-        <span v-else>{{ initials }}</span>
-        <i class="pi pi-bars"></i>
-      </button>
     </header>
 
+    <button
+      v-if="!chromeHidden"
+      class="avatar-menu-button"
+      type="button"
+      aria-label="Open menu"
+      :aria-expanded="menuOpen"
+      @click="menuOpen = !menuOpen"
+    >
+      <img v-if="user?.avatarUrl" :src="user.avatarUrl" alt="" />
+      <span v-else>{{ initials }}</span>
+      <i class="pi pi-bars"></i>
+    </button>
+
     <Transition name="menu-fade">
-      <aside v-if="menuOpen" class="account-menu" aria-label="Account menu">
+      <aside v-if="menuOpen && !chromeHidden" class="account-menu" aria-label="Account menu">
         <div class="account-menu__identity">
           <div class="account-menu__avatar">
             <img v-if="user?.avatarUrl" :src="user.avatarUrl" alt="" />
@@ -75,14 +70,11 @@ function logout() {
         </div>
 
         <nav class="account-menu__nav">
+          <RouterLink to="/" @click="closeMenu"><i class="pi pi-home"></i>Feed</RouterLink>
           <RouterLink to="/u/me" @click="closeMenu"><i class="pi pi-user"></i>Profile</RouterLink>
           <RouterLink to="/search" @click="closeMenu"><i class="pi pi-search"></i>Search</RouterLink>
           <button type="button" @click="openCreatePost"><i class="pi pi-plus-circle"></i>Create post</button>
           <button type="button" @click="openCreateStory"><i class="pi pi-stopwatch"></i>Create story</button>
-          <a :href="settingsHref">
-            <i class="pi pi-cog"></i>Settings
-          </a>
-          <button type="button" @click="logout"><i class="pi pi-sign-out"></i>Logout</button>
         </nav>
       </aside>
     </Transition>
@@ -110,7 +102,7 @@ function logout() {
   height: 76px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   padding: 18px clamp(18px, 3vw, 42px);
   pointer-events: none;
 }
@@ -130,23 +122,15 @@ function logout() {
   letter-spacing: 0;
 }
 
-.brand-symbol {
-  width: 34px;
-  height: 34px;
-  display: grid;
-  place-items: center;
-  border: 1px solid rgba(17, 24, 39, 0.12);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.72);
-  box-shadow: 0 12px 34px rgba(15, 23, 42, 0.08);
-}
-
 .brand-word {
   font-size: 20px;
 }
 
 .avatar-menu-button {
-  position: relative;
+  position: fixed;
+  z-index: 86;
+  right: clamp(18px, 3vw, 42px);
+  bottom: max(22px, env(safe-area-inset-bottom));
   width: 48px;
   height: 48px;
   border: 1px solid rgba(17, 24, 39, 0.1);
@@ -187,7 +171,7 @@ function logout() {
   position: fixed;
   z-index: 90;
   right: clamp(14px, 3vw, 34px);
-  top: 68px;
+  bottom: calc(max(22px, env(safe-area-inset-bottom)) + 64px);
   width: min(320px, calc(100vw - 28px));
   padding: 12px;
   border: 1px solid rgba(15, 23, 42, 0.1);
@@ -275,6 +259,6 @@ function logout() {
 .menu-fade-enter-from,
 .menu-fade-leave-to {
   opacity: 0;
-  transform: translateY(-6px);
+  transform: translateY(6px);
 }
 </style>

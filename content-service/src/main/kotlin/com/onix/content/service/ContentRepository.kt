@@ -10,6 +10,9 @@ interface ContentRepository {
     fun findPost(id: String): Post?
     fun listPostsByAuthor(authorId: String, limit: Int): List<Post>
     fun listRecentPosts(limit: Int): List<Post>
+    fun setPostLike(postId: String, userId: String, liked: Boolean)
+    fun countPostLikes(postId: String): Long
+    fun isPostLikedBy(postId: String, userId: String): Boolean
     fun saveStory(story: Story): Story
     fun findStory(id: String): Story?
     fun listActiveStories(now: Instant, limit: Int): List<Story>

@@ -3,8 +3,9 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { useRoute, useRouter } from "vue-router";
 import { useToast } from "primevue/usetoast";
 import { apiErrorMessage } from "@/api/client";
+import { ContentService } from "@/api/contentService";
 import { ProfileService } from "@/api/profileService";
-import type { AccountProfile, ProfileCanvasResponse, SessionUser } from "@/api/types";
+import type { AccountProfile, ContentBlock, ProfileCanvasResponse, ProfileContentPost, SessionUser } from "@/api/types";
 import { runtimeConfig } from "@/runtime-config";
 import { accountSettingsUrl } from "@/features/profile/accountLinks";
 import {
@@ -50,6 +51,7 @@ const canvasLayout = computed(() => (
   response.value ? buildProfileCanvasLayout(response.value, viewportSize.value) : null
 ));
 const canvasNodes = computed(() => canvasLayout.value?.nodes || []);
+const profilePosts = computed(() => response.value?.content?.posts || []);
 const canvasStageStyle = computed(() => {
   const stage = canvasLayout.value?.stage;
   if (!stage) return {};
@@ -159,6 +161,52 @@ function nodeInitials(node: PositionedProfileCanvasNode): string {
 
 function nodeAvatarUrl(node: PositionedProfileCanvasNode): string {
   return String(node.data.avatarUrl ?? "");
+}
+
+function openPost(post: ProfileContentPost) {
+  void router.push(`/p/${encodeURIComponent(post.id)}`);
+}
+
+function postBlocks(post: ProfileContentPost): ContentBlock[] {
+  return post.blocks || [];
+}
+
+function firstMedia(post: ProfileContentPost): ContentBlock | undefined {
+  return postBlocks(post).find((block) => block.type !== "TEXT");
+}
+
+function postMediaSource(post: ProfileContentPost): string {
+  const media = firstMedia(post);
+  return media ? ContentService.mediaSource(media) : "";
+}
+
+function postMediaType(post: ProfileContentPost): string {
+  return firstMedia(post)?.type || "TEXT";
+}
+
+function postText(post: ProfileContentPost): string {
+  return post.text || ContentService.textFromBlocks(postBlocks(post)) || "Media post";
+}
+
+async function togglePostLike(post: ProfileContentPost) {
+  if (!response.value) return;
+  try {
+    const next = post.likedByViewer
+      ? await ContentService.unlikePost(post.id)
+      : await ContentService.likePost(post.id);
+    const currentContent = response.value.content || { posts: [], stories: [], comments: [] };
+    response.value = {
+      ...response.value,
+      content: {
+        ...currentContent,
+        posts: currentContent.posts.map((item) => item.id === post.id
+          ? { ...item, likedByViewer: next.liked, likeCount: next.likeCount }
+          : item),
+      },
+    };
+  } catch (cause) {
+    toast.add({ severity: "error", summary: "Like", detail: apiErrorMessage(cause), life: 5000 });
+  }
 }
 
 function updateViewportSize() {
@@ -341,6 +389,44 @@ function drawCanvas() {
           </div>
         </div>
       </div>
+
+      <aside class="profile-posts-panel" aria-label="Profile posts">
+        <header>
+          <span>Posts</span>
+          <strong>{{ profilePosts.length }}</strong>
+        </header>
+        <div v-if="profilePosts.length" class="profile-posts-list">
+          <article v-for="post in profilePosts" :key="post.id" class="profile-post">
+            <button type="button" class="profile-post-open" @click="openPost(post)">
+              <span v-if="postMediaType(post) !== 'TEXT'" class="profile-post-media">
+                <img v-if="postMediaType(post) === 'IMAGE' && postMediaSource(post)" :src="postMediaSource(post)" alt="" />
+                <video v-else-if="postMediaType(post) === 'VIDEO' && postMediaSource(post)" :src="postMediaSource(post)" muted playsinline />
+                <i v-else :class="postMediaType(post) === 'AUDIO' ? 'pi pi-volume-up' : 'pi pi-image'"></i>
+              </span>
+              <span class="profile-post-copy">
+                <strong>{{ post.title || "Post" }}</strong>
+                <span>{{ postText(post) }}</span>
+              </span>
+            </button>
+            <footer>
+              <span class="profile-post-tags">
+                <small v-for="tag in post.tags.slice(0, 3)" :key="tag">#{{ tag }}</small>
+              </span>
+              <button
+                type="button"
+                class="profile-post-like"
+                :class="{ active: post.likedByViewer }"
+                :aria-label="post.likedByViewer ? 'Unlike post' : 'Like post'"
+                @click="togglePostLike(post)"
+              >
+                <i :class="post.likedByViewer ? 'pi pi-heart-fill' : 'pi pi-heart'"></i>
+                <span>{{ post.likeCount || 0 }}</span>
+              </button>
+            </footer>
+          </article>
+        </div>
+        <p v-else>No posts yet</p>
+      </aside>
     </section>
 
     <section v-else class="state-screen">
@@ -372,6 +458,154 @@ function drawCanvas() {
   overscroll-behavior-y: none;
   scrollbar-width: thin;
   touch-action: pan-x;
+}
+
+.profile-posts-panel {
+  position: fixed;
+  z-index: 8;
+  right: clamp(14px, 3vw, 34px);
+  top: 96px;
+  width: min(360px, calc(100vw - 28px));
+  max-height: calc(100dvh - 124px);
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.14);
+  backdrop-filter: blur(18px);
+  overflow: hidden;
+}
+
+.profile-posts-panel > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #111827;
+  font-weight: 900;
+}
+
+.profile-posts-panel > header span,
+.profile-posts-panel > p {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.profile-posts-panel > p {
+  margin: 0;
+  padding: 18px 4px 8px;
+  text-align: center;
+}
+
+.profile-posts-list {
+  display: grid;
+  gap: 10px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.profile-post {
+  display: grid;
+  gap: 9px;
+  border: 1px solid rgba(15, 23, 42, 0.07);
+  border-radius: 10px;
+  padding: 9px;
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.profile-post-open {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.profile-post-media {
+  height: 156px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #111827;
+  color: #ffffff;
+}
+
+.profile-post-media img,
+.profile-post-media video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.profile-post-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.profile-post-copy strong {
+  color: #111827;
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.profile-post-copy span {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.profile-post footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.profile-post-tags {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.profile-post-like {
+  min-width: 54px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #111827;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.profile-post-like.active {
+  border-color: rgba(225, 29, 72, 0.24);
+  color: #e11d48;
+  background: #fff1f2;
 }
 
 .canvas-stage {
