@@ -2,8 +2,9 @@ import { mount } from "@vue/test-utils";
 import { createRouter, createMemoryHistory } from "vue-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AppShell from "@/features/shell/AppShell.vue";
+import FeedPage from "@/features/content/FeedPage.vue";
 import StoryViewer from "@/features/stories/StoryViewer.vue";
-import { buildFeedCanvasNodes, feedNodesOverlap } from "@/features/content/feedCanvasLayout";
+import { buildFeedCanvasNodes, feedNodesOverlap, requiredFeedChunks, shouldKeepFeedChunk } from "@/features/content/feedCanvasLayout";
 import { buildCreatePostInput, emptyPostEditorState, extractHashtags, isPostEditorDirty } from "@/features/editor/postEditor";
 import { attachmentMarkdown, mediaReferences } from "@/features/contentDocument/contentModel";
 import { isFileLikeUrl, markdownLinks } from "@/features/display/markdown";
@@ -17,6 +18,10 @@ vi.mock("@/api/profileService", () => ({
   ProfileService: {
     session: vi.fn(),
   },
+}));
+
+vi.mock("primevue/usetoast", () => ({
+  useToast: () => ({ add: vi.fn() }),
 }));
 
 vi.mock("@/api/contentService", () => ({
@@ -55,6 +60,9 @@ vi.mock("@/api/contentService", () => ({
 	    storiesFeed: vi.fn().mockResolvedValue([
 	      { authorId: "alice", authorName: "alice", storyIds: ["story-1"], activeCount: 1, seen: false, closeFriends: false, latestAt: "2026-01-01T00:00:00Z" },
 	    ]),
+    recommendationFeed: vi.fn(),
+    likePost: vi.fn().mockResolvedValue({ postId: "clickable", liked: true, likeCount: 1 }),
+    unlikePost: vi.fn().mockResolvedValue({ postId: "clickable", liked: false, likeCount: 0 }),
     mediaSource: vi.fn((block: { data: Record<string, unknown> }) => {
       const direct = block.data.previewUrl || block.data.url || block.data.src;
       if (typeof direct === "string") return direct;
@@ -80,7 +88,22 @@ function ensureLocalStorage() {
   });
 }
 
-beforeEach(() => ensureLocalStorage());
+function ensureResizeObserver() {
+  if (globalThis.ResizeObserver) return;
+  Object.defineProperty(globalThis, "ResizeObserver", {
+    configurable: true,
+    value: class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  });
+}
+
+beforeEach(() => {
+  ensureLocalStorage();
+  ensureResizeObserver();
+});
 
 function feedItem(id: string, score: number, type: "TEXT" | "IMAGE" | "VIDEO" | "AUDIO" | "FILE" = "TEXT"): FeedItem {
   return {
@@ -118,6 +141,47 @@ describe("feed canvas layout", () => {
         expect(feedNodesOverlap(nodes[outer], nodes[inner])).toBe(false);
       }
     }
+  });
+
+  it("keeps nearby chunks and evicts distant canvas chunks", () => {
+    const chunks = requiredFeedChunks({ x: 20, y: 20 });
+
+    expect(chunks).toHaveLength(9);
+    expect(chunks).toContainEqual({ x: 0, y: 0 });
+    expect(shouldKeepFeedChunk("0:0", { x: 20, y: 20 })).toBe(true);
+    expect(shouldKeepFeedChunk("4:0", { x: 20, y: 20 })).toBe(false);
+  });
+
+  it("keeps post clicks interactive without starting canvas drag", async () => {
+    vi.mocked(ContentService.recommendationFeed).mockResolvedValue({
+      chunkX: 0,
+      chunkY: 0,
+      sessionSeed: "test",
+      items: [{
+        ...feedItem("clickable", 50),
+        cell: { q: 0, r: 0 },
+        emphasis: "compact",
+      }],
+    });
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: "/", component: FeedPage },
+        { path: "/p/:postId", component: { template: "<div />" } },
+      ],
+    });
+    await router.push("/");
+    await router.isReady();
+
+    const wrapper = mount(FeedPage, { global: { plugins: [router] } });
+    await vi.waitFor(() => expect(wrapper.find(".canvas-post").exists()).toBe(true));
+    await wrapper.find(".canvas-post").trigger("pointerdown");
+
+    expect(wrapper.find(".canvas-viewport").classes()).not.toContain("dragging");
+    await wrapper.find(".post-cloud__body").trigger("click");
+    await vi.waitFor(() => expect(router.currentRoute.value.path).toBe("/p/clickable"));
+
+    wrapper.unmount();
   });
 });
 
@@ -347,6 +411,32 @@ describe("app shell", () => {
 
     expect(wrapper.find(".brand-mark").exists()).toBe(true);
     expect(wrapper.text()).toContain("Onix");
+  });
+
+  it("keeps the avatar menu available on profile canvas routes", async () => {
+    vi.mocked(ProfileService.session).mockResolvedValue({
+      id: "1",
+      username: "alice",
+      firstName: "Alice",
+      avatarUrl: null,
+    });
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: "/u/:nickname", name: "Profile", component: { template: "<div />" } },
+      ],
+    });
+    router.push("/u/alice");
+    await router.isReady();
+
+    const wrapper = mount(AppShell, {
+      global: { plugins: [router] },
+      slots: { default: "<div>profile</div>" },
+    });
+    await Promise.resolve();
+
+    expect(wrapper.find(".avatar-menu-button").exists()).toBe(true);
+    expect(wrapper.find(".brand-mark").exists()).toBe(false);
   });
 
   it("hides shell chrome on focused creation routes", async () => {

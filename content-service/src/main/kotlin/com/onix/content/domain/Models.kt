@@ -69,6 +69,13 @@ data class AccountVisibility(
 }
 
 @Serializable
+data class AccountSocialGraph(
+    val followingIds: List<String> = emptyList(),
+    val friendIds: List<String> = emptyList(),
+    val blockedIds: List<String> = emptyList()
+)
+
+@Serializable
 data class ContentBlock(
     val id: String = UUID.randomUUID().toString(),
     val type: ContentBlockType,
@@ -139,6 +146,40 @@ data class FeedItem(
     val post: Post,
     val score: Double,
     val reasons: List<String> = emptyList()
+)
+
+@Serializable
+data class FeedCell(
+    val q: Int,
+    val r: Int
+)
+
+@Serializable
+enum class FeedEmphasis { hero, standard, compact }
+
+@Serializable
+data class RecommendationFeedInput(
+    val chunkX: Int = 0,
+    val chunkY: Int = 0,
+    val sessionSeed: String = "default",
+    val limit: Int = 12
+)
+
+@Serializable
+data class RecommendationFeedItem(
+    val post: Post,
+    val score: Double,
+    val reasons: List<String> = emptyList(),
+    val cell: FeedCell,
+    val emphasis: FeedEmphasis = FeedEmphasis.compact
+)
+
+@Serializable
+data class RecommendationFeedResponse(
+    val chunkX: Int,
+    val chunkY: Int,
+    val sessionSeed: String,
+    val items: List<RecommendationFeedItem> = emptyList()
 )
 
 @Serializable

@@ -1,6 +1,7 @@
 package com.onix.content.account
 
 import com.onix.content.domain.AccountVisibility
+import com.onix.content.domain.AccountSocialGraph
 import com.onix.content.domain.AccountUser
 import com.onix.content.domain.SessionUser
 import kotlinx.serialization.json.Json
@@ -44,6 +45,14 @@ class AccountClient(private val apiBaseUrl: String) {
         return AccountVisibility(ownerId = ownerId, viewerId = viewerId, isPrivate = false).copy(
             relationship = com.onix.content.domain.AccountRelationship(isFollowing = sameUser)
         )
+    }
+
+    fun socialGraph(viewerId: String, accessToken: String): AccountSocialGraph {
+        val viewer = URLEncoder.encode(viewerId, StandardCharsets.UTF_8)
+        val response = request("GET", "/internal/social-graph?viewerId=$viewer", accessToken)
+        if (response.statusCode() == 401) throw AccountUnauthorized()
+        if (response.statusCode() !in 200..299) return AccountSocialGraph()
+        return json.decodeFromString(response.body())
     }
 
     private fun request(method: String, path: String, accessToken: String): HttpResponse<String> {

@@ -8,12 +8,21 @@ import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 
 class InMemoryContentRepository : ContentRepository {
+    private data class PostView(
+        val postId: String,
+        val userId: String,
+        val durationMs: Long,
+        val viewedAt: Instant,
+        val viewCount: Long
+    )
+
     private val posts = ConcurrentHashMap<String, Post>()
     private val stories = ConcurrentHashMap<String, Story>()
     private val comments = ConcurrentHashMap<String, Comment>()
     private val postLikes = ConcurrentHashMap.newKeySet<Pair<String, String>>()
     private val storyLikes = ConcurrentHashMap.newKeySet<Pair<String, String>>()
     private val commentLikes = ConcurrentHashMap.newKeySet<Pair<String, String>>()
+    private val postViews = ConcurrentHashMap<Pair<String, String>, PostView>()
     private val storyViews = ConcurrentHashMap<String, Instant>()
 
     override fun savePost(post: Post): Post {
@@ -35,6 +44,22 @@ class InMemoryContentRepository : ContentRepository {
             .sortedByDescending { it.createdAt }
             .take(limit)
 
+    override fun listViewerTagAffinity(userId: String, limit: Int): List<String> {
+        val likedPostIds = postLikes.filter { it.second == userId }.map { it.first }.toSet()
+        val viewedPostIds = postViews.values.filter { it.userId == userId }.map { it.postId }.toSet()
+        return (likedPostIds + viewedPostIds)
+            .asSequence()
+            .mapNotNull(posts::get)
+            .flatMap { it.tags.asSequence() }
+            .filter(String::isNotBlank)
+            .groupingBy { it }
+            .eachCount()
+            .entries
+            .sortedByDescending { it.value }
+            .map { it.key }
+            .take(limit)
+    }
+
     override fun setPostLike(postId: String, userId: String, liked: Boolean) {
         val key = postId to userId
         if (liked) postLikes.add(key) else postLikes.remove(key)
@@ -45,6 +70,24 @@ class InMemoryContentRepository : ContentRepository {
 
     override fun isPostLikedBy(postId: String, userId: String): Boolean =
         postLikes.contains(postId to userId)
+
+    override fun recordPostView(postId: String, userId: String, durationMs: Long, viewedAt: Instant) {
+        postViews.compute(postId to userId) { _, current ->
+            PostView(
+                postId = postId,
+                userId = userId,
+                durationMs = (current?.durationMs ?: 0L) + durationMs.coerceAtLeast(0),
+                viewedAt = viewedAt,
+                viewCount = (current?.viewCount ?: 0L) + 1
+            )
+        }
+    }
+
+    override fun countPostViews(postId: String): Long =
+        postViews.values.filter { it.postId == postId }.sumOf { it.viewCount }
+
+    override fun countPostViewsByUser(postId: String, userId: String): Long =
+        postViews[postId to userId]?.viewCount ?: 0L
 
     override fun setStoryLike(storyId: String, userId: String, liked: Boolean) {
         val key = storyId to userId

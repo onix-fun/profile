@@ -92,6 +92,37 @@ describe("profile canvas layout", () => {
     expect(layout.edges.filter((edge) => edge.target.startsWith("post:"))).toHaveLength(0);
   });
 
+  it("reflows profile posts horizontally when viewport height is tight", () => {
+    const layout = buildProfileCanvasLayout({
+      ...response([
+        { id: "avatar", type: "avatar", position: { x: 0, y: 0 }, data: {} },
+      ]),
+      content: {
+        posts: Array.from({ length: 10 }, (_, index) => ({
+          id: `post-${index}`,
+          text: `Post ${index}`,
+          tags: [],
+          createdAt: `2026-07-${String(index + 1).padStart(2, "0")}T00:00:00Z`,
+        })),
+        stories: [],
+        comments: [],
+      },
+    }, { width: 720, height: 420 });
+
+    const postNodes = layout.nodes.filter((node) => node.type === "post");
+    expect(postNodes).toHaveLength(10);
+    expect(postNodes.every((node) => node.y >= 0 && node.y + node.height <= layout.stage.height)).toBe(true);
+    expect(new Set(postNodes.map((node) => node.center.x)).size).toBeGreaterThan(3);
+    for (let outer = 0; outer < postNodes.length; outer += 1) {
+      for (let inner = outer + 1; inner < postNodes.length; inner += 1) {
+        expect(postNodes[outer].x < postNodes[inner].x + postNodes[inner].width + 18
+          && postNodes[outer].x + postNodes[outer].width + 18 > postNodes[inner].x
+          && postNodes[outer].y < postNodes[inner].y + postNodes[inner].height + 18
+          && postNodes[outer].y + postNodes[outer].height + 18 > postNodes[inner].y).toBe(false);
+      }
+    }
+  });
+
   it("adds archive as an upper-left avatar branch when archived stories exist", () => {
     const layout = buildProfileCanvasLayout(response([
       { id: "avatar", type: "avatar", position: { x: 0, y: 0 }, data: {} },

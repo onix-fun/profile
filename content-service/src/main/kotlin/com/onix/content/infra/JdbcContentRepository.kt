@@ -89,6 +89,36 @@ class JdbcContentRepository(private val ds: DataSource) : ContentRepository {
         }
     }
 
+    override fun listViewerTagAffinity(userId: String, limit: Int): List<String> = ds.connection.use { conn ->
+        conn.prepareStatement(
+            """
+            SELECT tag
+            FROM (
+                SELECT pt.tag, COUNT(*) AS weight, MAX(pl.created_at) AS latest
+                FROM content.post_likes pl
+                JOIN content.post_tags pt ON pt.post_id = pl.post_id
+                WHERE pl.user_id = ?
+                GROUP BY pt.tag
+                UNION ALL
+                SELECT pt.tag, SUM(pv.view_count) AS weight, MAX(pv.viewed_at) AS latest
+                FROM content.post_views pv
+                JOIN content.post_tags pt ON pt.post_id = pv.post_id
+                WHERE pv.user_id = ?
+                GROUP BY pt.tag
+            ) affinity
+            GROUP BY tag
+            ORDER BY SUM(weight) DESC, MAX(latest) DESC
+            LIMIT ?
+            """.trimIndent()
+        ).use { ps ->
+            val viewerId = UUID.fromString(userId)
+            ps.setObject(1, viewerId)
+            ps.setObject(2, viewerId)
+            ps.setInt(3, limit)
+            ps.executeQuery().use { rs -> rs.rows { rs.getString("tag") } }
+        }
+    }
+
     override fun setPostLike(postId: String, userId: String, liked: Boolean) {
         ds.connection.use { conn ->
             if (liked) {
@@ -126,6 +156,42 @@ class JdbcContentRepository(private val ds: DataSource) : ContentRepository {
             ps.setObject(1, UUID.fromString(postId))
             ps.setObject(2, UUID.fromString(userId))
             ps.executeQuery().use { rs -> rs.next() }
+        }
+    }
+
+    override fun recordPostView(postId: String, userId: String, durationMs: Long, viewedAt: Instant) {
+        ds.connection.use { conn ->
+            conn.prepareStatement(
+                """
+                INSERT INTO content.post_views (post_id, user_id, duration_ms, viewed_at, view_count)
+                VALUES (?, ?, ?, ?, 1)
+                ON CONFLICT (post_id, user_id) DO UPDATE SET
+                    duration_ms = content.post_views.duration_ms + EXCLUDED.duration_ms,
+                    viewed_at = EXCLUDED.viewed_at,
+                    view_count = content.post_views.view_count + 1
+                """.trimIndent()
+            ).use { ps ->
+                ps.setObject(1, UUID.fromString(postId))
+                ps.setObject(2, UUID.fromString(userId))
+                ps.setLong(3, durationMs.coerceAtLeast(0))
+                ps.setTimestamp(4, Timestamp.from(viewedAt))
+                ps.executeUpdate()
+            }
+        }
+    }
+
+    override fun countPostViews(postId: String): Long = ds.connection.use { conn ->
+        conn.prepareStatement("SELECT COALESCE(SUM(view_count), 0) FROM content.post_views WHERE post_id = ?").use { ps ->
+            ps.setObject(1, UUID.fromString(postId))
+            ps.executeQuery().use { rs -> if (rs.next()) rs.getLong(1) else 0L }
+        }
+    }
+
+    override fun countPostViewsByUser(postId: String, userId: String): Long = ds.connection.use { conn ->
+        conn.prepareStatement("SELECT view_count FROM content.post_views WHERE post_id = ? AND user_id = ?").use { ps ->
+            ps.setObject(1, UUID.fromString(postId))
+            ps.setObject(2, UUID.fromString(userId))
+            ps.executeQuery().use { rs -> if (rs.next()) rs.getLong(1) else 0L }
         }
     }
 

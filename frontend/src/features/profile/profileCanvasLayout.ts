@@ -77,10 +77,13 @@ const NODE_SIZES: Record<ProfileKnownNodeId, ProfileCanvasSize> = {
   followAction: { width: 172, height: 48 },
 };
 
-const POST_NODE_SIZE: ProfileCanvasSize = { width: 214, height: 172 };
+const POST_NODE_SIZE: ProfileCanvasSize = { width: 136, height: 136 };
 const MIN_STAGE_WIDTH_EXTRA = 420;
 const STAGE_PADDING_X = 180;
 const COLLISION_GAP = 18;
+const POST_GRID_START_X = 346;
+const POST_GRID_COLUMN_GAP = 46;
+const POST_GRID_ROW_GAP = 20;
 
 export function buildProfileCanvasLayout(
   response: ProfileCanvasResponse,
@@ -94,7 +97,8 @@ export function buildProfileCanvasLayout(
   ];
   const visibleIds = new Set<ProfileCanvasNodeId>(visibleNodes.map((node) => node.id));
   const verticalScale = Math.min(1, Math.max(0.58, (viewport.height / 2 - 62) / 300));
-  const relativeNodes = resolveCollisions(visibleNodes.map((node) => positionRelativeNode(node, verticalScale)), viewport);
+  const postOffsets = profilePostOffsets(response.content?.posts?.length || 0, viewport);
+  const relativeNodes = resolveCollisions(visibleNodes.map((node) => positionRelativeNode(node, verticalScale, postOffsets)), viewport);
   const rawBounds = boundsFor(relativeNodes);
   const contentWidth = Math.max(Math.abs(rawBounds.minX), Math.abs(rawBounds.maxX)) * 2 + STAGE_PADDING_X * 2;
   const stage = {
@@ -158,12 +162,13 @@ function archiveNode(count: number): CanvasNode & { id: "archive" } {
 function positionRelativeNode(
   node: (CanvasNode & { id: ProfileKnownNodeId }) | (CanvasNode & { id: ProfilePostNodeId }),
   verticalScale: number,
+  postOffsets: ProfileCanvasPoint[],
 ): PositionedProfileCanvasNode {
   const size = isPostNodeId(node.id) ? POST_NODE_SIZE : NODE_SIZES[node.id];
-  const offset = isPostNodeId(node.id) ? postOffset(Number(node.data.index || 0)) : ORBIT_OFFSETS[node.id];
+  const offset = isPostNodeId(node.id) ? postOffsets[Number(node.data.index || 0)] || postOffsets[0] || { x: POST_GRID_START_X, y: 0 } : ORBIT_OFFSETS[node.id];
   const center = {
     x: offset.x,
-    y: offset.y * verticalScale,
+    y: isPostNodeId(node.id) ? offset.y : offset.y * verticalScale,
   };
 
   return {
@@ -192,12 +197,29 @@ function positionAbsoluteNode(
   };
 }
 
-function postOffset(index: number): ProfileCanvasPoint {
-  const column = Math.floor(index / 4);
-  const row = index % 4;
-  const x = 336 + column * 228;
-  const y = [-168, -54, 70, 190][row] + column * 16;
-  return { x, y };
+function profilePostOffsets(count: number, viewport: ProfileCanvasSize): ProfileCanvasPoint[] {
+  if (count <= 0) return [];
+  const maxY = Math.max(110, viewport.height / 2 - POST_NODE_SIZE.height / 2 - 18);
+  const rowPitch = POST_NODE_SIZE.height + POST_GRID_ROW_GAP;
+  const maxRows = Math.max(1, Math.floor((maxY * 2 + POST_GRID_ROW_GAP) / rowPitch));
+  const rowCount = Math.max(1, Math.min(5, maxRows));
+  const columnPitch = POST_NODE_SIZE.width + POST_GRID_COLUMN_GAP;
+  const offsets: ProfileCanvasPoint[] = [];
+  let column = 0;
+
+  while (offsets.length < count) {
+    const rowsInColumn = column % 2 === 1 && rowCount > 2 ? rowCount - 1 : rowCount;
+    const yStart = -((rowsInColumn - 1) * rowPitch) / 2;
+    for (let row = 0; row < rowsInColumn && offsets.length < count; row += 1) {
+      offsets.push({
+        x: POST_GRID_START_X + column * columnPitch,
+        y: yStart + row * rowPitch,
+      });
+    }
+    column += 1;
+  }
+
+  return offsets;
 }
 
 function positionEdge(

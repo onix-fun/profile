@@ -223,6 +223,16 @@ private fun dispatchGraphQl(
             val limit = variables["limit"]?.jsonPrimitive?.intOrNull ?: 20
             put("feed", json.encodeToJsonElement(content.feed(user.id, tags, limit, authorResolver(user, account, token))))
         }
+        "recommendationFeed" -> buildJsonObject {
+            val input = decodeInput(variables, RecommendationFeedInput.serializer())
+            val graph = if (account != null && token != null) account.socialGraph(user.id, token) else AccountSocialGraph()
+            put("recommendationFeed", json.encodeToJsonElement(content.recommendationFeed(
+                viewerId = user.id,
+                input = input,
+                socialGraph = graph,
+                authorResolver = authorResolver(user, account, token)
+            )))
+        }
         "post" -> buildJsonObject {
             val id = variables["id"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("id is required")
             put("post", json.encodeToJsonElement(content.post(id, user.id, authorResolver(user, account, token))))
@@ -294,7 +304,9 @@ private fun dispatchGraphQl(
             put("unlikeComment", json.encodeToJsonElement(content.unlikeComment(user, commentId)))
         }
         "recordView" -> buildJsonObject {
-            put(operation, true)
+            val postId = variables["postId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("postId is required")
+            val durationMs = variables["durationMs"]?.jsonPrimitive?.longOrNull ?: 0L
+            put(operation, JsonPrimitive(content.recordPostView(user, postId, durationMs)))
         }
         "recordStoryView" -> buildJsonObject {
             val storyId = variables["storyId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("storyId is required")
@@ -307,7 +319,7 @@ private fun dispatchGraphQl(
 
 private fun operationFromQuery(query: String?): String? {
     if (query.isNullOrBlank()) return null
-    return listOf("createPost", "createStory", "createComment", "feed", "post", "storyGroup", "storyArchive", "story", "storiesFeed", "comments", "profileContent", "likePost", "unlikePost", "likeStory", "unlikeStory", "likeComment", "unlikeComment", "recordView", "recordStoryView")
+    return listOf("createPost", "createStory", "createComment", "recommendationFeed", "feed", "post", "storyGroup", "storyArchive", "story", "storiesFeed", "comments", "profileContent", "likePost", "unlikePost", "likeStory", "unlikeStory", "likeComment", "unlikeComment", "recordView", "recordStoryView")
         .firstOrNull { query.contains(it) }
 }
 

@@ -9,12 +9,21 @@ import kotlinx.serialization.json.longOrNull
 import java.time.Clock
 import java.time.Instant
 import java.util.UUID
+import kotlin.math.abs
+import kotlin.math.max
 
 class ContentService(
     private val repository: ContentRepository,
     private val searchEvents: SearchEventPublisher = SearchEventPublisher.noop(),
     private val clock: Clock = Clock.systemUTC()
 ) {
+    private data class ScoredRecommendation(
+        val post: Post,
+        val score: Double,
+        val reasons: List<String>,
+        val emphasis: FeedEmphasis
+    )
+
     fun createPost(author: SessionUser, input: CreatePostInput): Post {
         val normalizedTags = input.tags.map { it.trim().lowercase() }.filter(String::isNotBlank).distinct().take(20)
         val blocks = input.blocks.ifEmpty { if (input.text.isBlank()) emptyList() else listOf(textBlock(input.text)) }
@@ -135,6 +144,43 @@ class ContentService(
             }
             .sortedWith(compareByDescending<FeedItem> { it.score }.thenByDescending { it.post.createdAt })
             .take(limit.coerceIn(1, 100))
+    }
+
+    fun recommendationFeed(
+        viewerId: String,
+        input: RecommendationFeedInput,
+        socialGraph: AccountSocialGraph = AccountSocialGraph(),
+        authorResolver: (String) -> AccountUser? = { null }
+    ): RecommendationFeedResponse {
+        val pageLimit = input.limit.coerceIn(1, 50)
+        val seed = input.sessionSeed.ifBlank { "default" }
+        val blockedIds = socialGraph.blockedIds.toSet()
+        val tagAffinity = repository.listViewerTagAffinity(viewerId, 80).toSet()
+        val now = Instant.now(clock)
+        val candidates = repository.listRecentPosts(500)
+            .filter { it.authorId !in blockedIds }
+            .map { withViewerState(it, viewerId) }
+            .map { withAuthor(it, authorResolver) }
+            .map { post -> scoreRecommendation(post, viewerId, tagAffinity, socialGraph, now) }
+
+        val ordered = stableRecommendationOrder(candidates, seed)
+        val offset = chunkOrdinal(input.chunkX, input.chunkY) * pageLimit
+        val page = if (offset >= ordered.size) emptyList() else ordered.drop(offset).take(pageLimit)
+
+        return RecommendationFeedResponse(
+            chunkX = input.chunkX,
+            chunkY = input.chunkY,
+            sessionSeed = seed,
+            items = page.mapIndexed { index, scored ->
+                RecommendationFeedItem(
+                    post = scored.post,
+                    score = scored.score,
+                    reasons = scored.reasons,
+                    cell = FeedCell(q = index % FEED_CELL_COLUMNS, r = index / FEED_CELL_COLUMNS),
+                    emphasis = scored.emphasis
+                )
+            }
+        )
     }
 
     fun post(
@@ -289,6 +335,113 @@ class ContentService(
         return true
     }
 
+    fun recordPostView(user: SessionUser, postId: String, durationMs: Long = 0): Boolean {
+        repository.findPost(postId) ?: throw IllegalArgumentException("Post not found")
+        repository.recordPostView(postId, user.id, durationMs, Instant.now(clock))
+        return true
+    }
+
+    private fun scoreRecommendation(
+        post: Post,
+        viewerId: String,
+        tagAffinity: Set<String>,
+        socialGraph: AccountSocialGraph,
+        now: Instant
+    ): ScoredRecommendation {
+        val tagScore = post.tags.count { it in tagAffinity } * 4.0
+        val friendScore = if (post.authorId in socialGraph.friendIds) 5.0 else 0.0
+        val followingScore = if (post.authorId in socialGraph.followingIds) 3.0 else 0.0
+        val likeScore = post.likeCount.coerceAtMost(40) * 0.18
+        val popularityScore = repository.countPostViews(post.id).coerceAtMost(80) * 0.04
+        val ageHours = java.time.Duration.between(post.createdAt, now).toHours().coerceAtLeast(0)
+        val recencyScore = 2.0 / (1 + ageHours).toDouble()
+        val ownPenalty = if (post.authorId == viewerId) -4.0 else 0.0
+        val viewerViews = repository.countPostViewsByUser(post.id, viewerId)
+        val viewPenalty = viewerViews.coerceAtMost(5) * -1.2
+        val score = tagScore + friendScore + followingScore + likeScore + popularityScore + recencyScore + ownPenalty + viewPenalty
+
+        return ScoredRecommendation(
+            post = post,
+            score = score,
+            reasons = buildList {
+                if (friendScore > 0) add("friend")
+                else if (followingScore > 0) add("following")
+                if (tagScore > 0) add("tag-affinity")
+                if (post.likeCount > 0) add("popular")
+                if (popularityScore > 0) add("viewed-by-others")
+                if (viewerViews > 0) add("seen-before")
+                add("recent")
+            },
+            emphasis = when {
+                post.blocks.any { it.type == ContentBlockType.VIDEO } || score >= 8.0 -> FeedEmphasis.hero
+                post.blocks.any { it.type == ContentBlockType.IMAGE } || score >= 3.0 -> FeedEmphasis.standard
+                else -> FeedEmphasis.compact
+            }
+        )
+    }
+
+    private fun stableRecommendationOrder(candidates: List<ScoredRecommendation>, seed: String): List<ScoredRecommendation> {
+        val ranked = candidates
+            .sortedWith(compareByDescending<ScoredRecommendation> { it.score }.thenByDescending { it.post.createdAt }.thenBy { stableHash("${seed}:rank:${it.post.id}") })
+        val explore = candidates.sortedBy { stableHash("${seed}:explore:${it.post.id}") }
+        val used = mutableSetOf<String>()
+        var rankedIndex = 0
+        var exploreIndex = 0
+        val ordered = mutableListOf<ScoredRecommendation>()
+
+        while (ordered.size < candidates.size) {
+            val useExplore = (ordered.size + 1) % EXPLORATION_INTERVAL == 0
+            val next = if (useExplore) {
+                nextUnused(explore, used, exploreIndex).also { exploreIndex = it.second }.first
+            } else {
+                nextUnused(ranked, used, rankedIndex).also { rankedIndex = it.second }.first
+            } ?: nextUnused(ranked, used, rankedIndex).also { rankedIndex = it.second }.first
+                ?: nextUnused(explore, used, exploreIndex).also { exploreIndex = it.second }.first
+                ?: break
+
+            used.add(next.post.id)
+            ordered.add(if (useExplore) next.copy(reasons = (next.reasons + "explore").distinct()) else next)
+        }
+        return ordered
+    }
+
+    private fun nextUnused(
+        items: List<ScoredRecommendation>,
+        used: Set<String>,
+        startIndex: Int
+    ): Pair<ScoredRecommendation?, Int> {
+        var index = startIndex
+        while (index < items.size) {
+            val item = items[index]
+            index += 1
+            if (item.post.id !in used) return item to index
+        }
+        return null to index
+    }
+
+    private fun chunkOrdinal(x: Int, y: Int): Int {
+        val radius = max(abs(x), abs(y))
+        if (radius == 0) return 0
+        val previousRingSize = (2 * radius - 1) * (2 * radius - 1)
+        val side = radius * 2
+        val offset = when {
+            y == -radius -> x + radius
+            x == radius -> side + y + radius
+            y == radius -> side * 2 + (radius - x)
+            else -> side * 3 + (radius - y)
+        }
+        return previousRingSize + offset
+    }
+
+    private fun stableHash(value: String): Int {
+        var result = 2166136261u
+        value.forEach { char ->
+            result = result xor char.code.toUInt()
+            result *= 16777619u
+        }
+        return result.toInt() and Int.MAX_VALUE
+    }
+
     private fun canViewStory(story: Story, visibility: AccountVisibility, includeArchived: Boolean): Boolean {
         if (visibility.isBlocked) return false
         if (!includeArchived && !story.expiresAt.isAfter(Instant.now(clock))) return false
@@ -378,5 +531,7 @@ class ContentService(
     companion object {
         const val STORY_VIDEO_MAX_MS = 60_000L
         const val STORY_IMAGE_DURATION_MS = 5_000L
+        private const val FEED_CELL_COLUMNS = 3
+        private const val EXPLORATION_INTERVAL = 8
     }
 }

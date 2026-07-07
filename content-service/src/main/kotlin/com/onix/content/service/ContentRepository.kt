@@ -10,9 +10,13 @@ interface ContentRepository {
     fun findPost(id: String): Post?
     fun listPostsByAuthor(authorId: String, limit: Int): List<Post>
     fun listRecentPosts(limit: Int): List<Post>
+    fun listViewerTagAffinity(userId: String, limit: Int): List<String>
     fun setPostLike(postId: String, userId: String, liked: Boolean)
     fun countPostLikes(postId: String): Long
     fun isPostLikedBy(postId: String, userId: String): Boolean
+    fun recordPostView(postId: String, userId: String, durationMs: Long, viewedAt: Instant)
+    fun countPostViews(postId: String): Long
+    fun countPostViewsByUser(postId: String, userId: String): Long
     fun setStoryLike(storyId: String, userId: String, liked: Boolean)
     fun countStoryLikes(storyId: String): Long
     fun isStoryLikedBy(storyId: String, userId: String): Boolean

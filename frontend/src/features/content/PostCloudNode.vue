@@ -68,17 +68,17 @@ const authorAvatar = computed(() => props.post.author?.avatarUrl || "");
       </span>
 
       <span v-else class="post-cloud__text">
-        <span class="post-cloud__author">
+        <span v-if="mode !== 'profile'" class="post-cloud__author">
           <img v-if="authorAvatar" :src="authorAvatar" alt="" />
           <i v-else class="pi pi-user"></i>
           <small>@{{ authorName }}</small>
         </span>
         <strong>{{ title }}</strong>
-        <span v-html="renderedText"></span>
+        <span v-if="mode !== 'profile'" v-html="renderedText"></span>
       </span>
     </button>
 
-    <span v-if="mode !== 'full'" class="post-cloud__actions" :class="{ disabled: disabledActions }">
+    <span v-if="mode !== 'full' && mode !== 'profile'" class="post-cloud__actions" :class="{ disabled: disabledActions }">
       <button type="button" title="Like" :disabled="disabledActions" @click.stop="emit('like')">
         <i :class="post.likedByViewer ? 'pi pi-heart-fill' : 'pi pi-heart'"></i>
         <span>{{ post.likeCount || 0 }}</span>
@@ -91,10 +91,10 @@ const authorAvatar = computed(() => props.post.author?.avatarUrl || "");
       </button>
     </span>
 
-    <span v-if="reasons.length || post.tags.length" class="post-cloud__meta">
+    <span v-if="mode === 'feed' && (reasons.length || post.tags.length)" class="post-cloud__meta">
       <small>@{{ authorName }}</small>
       <small v-for="reason in reasons.slice(0, 1)" :key="reason">{{ reason }}</small>
-      <small v-for="tag in post.tags.slice(0, mode === 'profile' ? 1 : 2)" :key="tag">#{{ tag }}</small>
+      <small v-for="tag in post.tags.slice(0, 2)" :key="tag">#{{ tag }}</small>
     </span>
   </article>
 </template>
@@ -102,6 +102,7 @@ const authorAvatar = computed(() => props.post.author?.avatarUrl || "");
 <style scoped>
 .post-cloud {
   position: relative;
+  height: 100%;
   min-width: 0;
   color: #111827;
 }
@@ -143,6 +144,8 @@ const authorAvatar = computed(() => props.post.author?.avatarUrl || "");
 
 .post-cloud__media {
   aspect-ratio: 1;
+  width: 100%;
+  height: 100%;
   border-radius: 50%;
   display: grid;
   place-items: center;
@@ -318,13 +321,49 @@ const authorAvatar = computed(() => props.post.author?.avatarUrl || "");
   white-space: nowrap;
 }
 
+.post-cloud--feed {
+  padding-bottom: 0;
+}
+
+.post-cloud--feed .post-cloud__body {
+  min-height: calc(100% - 42px);
+}
+
+.post-cloud--feed .post-cloud__media,
+.post-cloud--feed .post-cloud__text,
+.post-cloud--feed .post-cloud__file {
+  max-height: calc(100% - 42px);
+}
+
+.post-cloud--feed .post-cloud__actions {
+  right: 10px;
+  bottom: 8px;
+}
+
+.post-cloud--feed .post-cloud__meta {
+  left: 14px;
+  top: auto;
+  bottom: 50px;
+  max-width: calc(100% - 28px);
+}
+
 .post-cloud--profile .post-cloud__text {
-  min-height: 102px;
-  padding: 16px 18px;
+  height: 100%;
+  min-height: 0;
+  padding: 14px;
+  border-radius: 22px;
+  place-items: center;
+  text-align: center;
 }
 
 .post-cloud--profile .post-cloud__text strong {
-  font-size: 15px;
+  display: -webkit-box;
+  color: #111827;
+  font-size: 13px;
+  line-height: 1.18;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
 }
 
 .post-cloud--profile .post-cloud__text span {
@@ -332,10 +371,18 @@ const authorAvatar = computed(() => props.post.author?.avatarUrl || "");
   -webkit-line-clamp: 3;
 }
 
-.post-cloud--profile .post-cloud__actions {
-  right: -18px;
-  bottom: -15px;
-  padding: 5px;
+.post-cloud--profile .post-cloud__media {
+  border-radius: 22px;
+}
+
+.post-cloud--profile.post-cloud--video .post-cloud__media {
+  border-radius: 22px;
+  transform: none;
+}
+
+.post-cloud--profile.post-cloud--video .post-cloud__media video,
+.post-cloud--profile.post-cloud--video .post-cloud__media i {
+  transform: none;
 }
 
 .post-cloud--full .post-cloud__body {

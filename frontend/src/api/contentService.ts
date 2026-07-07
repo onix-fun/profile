@@ -8,6 +8,8 @@ import type {
   CreatePostInput,
   CreateStoryInput,
   FeedItem,
+  RecommendationFeedInput,
+  RecommendationFeedResponse,
   PostReactionState,
   Story,
   StoryArchiveResponse,
@@ -96,6 +98,11 @@ async function multipartRequest<T>(
 }
 
 export class ContentService {
+  static async recommendationFeed(input: RecommendationFeedInput): Promise<RecommendationFeedResponse> {
+    const data = await request<{ recommendationFeed: RecommendationFeedResponse }>("recommendationFeed", { input });
+    return data.recommendationFeed;
+  }
+
   static async feed(tags: string[] = [], limit = 30): Promise<FeedItem[]> {
     const data = await request<{ feed: FeedItem[] }>("feed", { tags, limit });
     return data.feed;

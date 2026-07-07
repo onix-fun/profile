@@ -145,6 +145,32 @@ export interface FeedItem {
   reasons: string[];
 }
 
+export interface FeedCell {
+  q: number;
+  r: number;
+}
+
+export type FeedEmphasis = "hero" | "standard" | "compact";
+
+export interface RecommendationFeedInput {
+  chunkX: number;
+  chunkY: number;
+  sessionSeed: string;
+  limit?: number;
+}
+
+export interface RecommendationFeedItem extends FeedItem {
+  cell: FeedCell;
+  emphasis: FeedEmphasis;
+}
+
+export interface RecommendationFeedResponse {
+  chunkX: number;
+  chunkY: number;
+  sessionSeed: string;
+  items: RecommendationFeedItem[];
+}
+
 export interface PostReactionState {
   postId: string;
   liked: boolean;
@@ -166,12 +192,14 @@ export interface CommentReactionState {
 export interface CanvasPostNode {
   id: string;
   item: FeedItem;
+  chunkKey?: string;
+  cell?: FeedCell;
   x: number;
   y: number;
   width: number;
   height: number;
   mediaType: ContentBlock["type"] | "TEXT";
-  emphasis: "hero" | "standard" | "compact";
+  emphasis: FeedEmphasis;
 }
 
 export interface CommentItem {

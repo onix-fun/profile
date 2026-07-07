@@ -15,15 +15,18 @@ const initials = computed(() => {
   const source = user.value?.firstName || user.value?.username || "U";
   return source.slice(0, 1).toUpperCase();
 });
-const chromeHidden = computed(() => (
+const controlsHidden = computed(() => (
   route.name === "CreatePost"
   || route.name === "CreateStory"
-  || route.name === "Profile"
-  || route.name === "SocialCanvas"
   || route.name === "StoryArchive"
   || route.name === "StoryViewer"
 ));
-const headerVisible = computed(() => !chromeHidden.value && route.path !== "/");
+const headerVisible = computed(() => (
+  !controlsHidden.value
+  && route.path !== "/"
+  && route.name !== "Profile"
+  && route.name !== "SocialCanvas"
+));
 const settingsHref = computed(() => accountSettingsUrl(runtimeConfig.accountFrontendUrl, window.location.href));
 
 onMounted(async () => {
@@ -58,7 +61,7 @@ function openCreateStory() {
     </header>
 
     <button
-      v-if="!chromeHidden"
+      v-if="!controlsHidden"
       class="avatar-menu-button"
       type="button"
       aria-label="Open menu"
@@ -71,7 +74,7 @@ function openCreateStory() {
     </button>
 
     <Transition name="menu-fade">
-      <aside v-if="menuOpen && !chromeHidden" class="account-menu" aria-label="Account menu">
+      <aside v-if="menuOpen && !controlsHidden" class="account-menu" aria-label="Account menu">
         <div class="account-menu__identity">
           <div class="account-menu__avatar">
             <img v-if="user?.avatarUrl" :src="user.avatarUrl" alt="" />

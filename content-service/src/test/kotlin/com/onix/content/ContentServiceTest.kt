@@ -174,6 +174,79 @@ class ContentServiceTest {
     }
 
     @Test
+    fun `recommendation feed is deterministic for the same chunk and seed`() {
+        val service = service()
+        repeat(18) { index ->
+            service.createPost(user, CreatePostInput(text = "Post $index", tags = listOf("tag-${index % 3}")))
+        }
+
+        val input = RecommendationFeedInput(chunkX = 0, chunkY = 0, sessionSeed = "stable", limit = 9)
+        val first = service.recommendationFeed(viewer.id, input)
+        val second = service.recommendationFeed(viewer.id, input)
+
+        assertEquals(first, second)
+        assertEquals(first.items.map { it.cell }, first.items.mapIndexed { index, _ -> FeedCell(index % 3, index / 3) })
+    }
+
+    @Test
+    fun `recommendation neighbor chunks do not duplicate posts`() {
+        val service = service()
+        repeat(36) { index ->
+            service.createPost(user, CreatePostInput(text = "Post $index", tags = listOf("tag-${index % 4}")))
+        }
+
+        val first = service.recommendationFeed(viewer.id, RecommendationFeedInput(chunkX = 0, chunkY = 0, sessionSeed = "stable", limit = 6))
+        val neighbor = service.recommendationFeed(viewer.id, RecommendationFeedInput(chunkX = 0, chunkY = -1, sessionSeed = "stable", limit = 6))
+
+        assertTrue(first.items.map { it.post.id }.intersect(neighbor.items.map { it.post.id }.toSet()).isEmpty())
+    }
+
+    @Test
+    fun `recommendation feed boosts authors from social graph`() {
+        val service = service()
+        val followed = SessionUser(id = "33333333-3333-3333-3333-333333333333", username = "followed")
+        val followedPost = service.createPost(followed, CreatePostInput(text = "Social", tags = listOf("general")))
+        service.createPost(user, CreatePostInput(text = "Other", tags = listOf("general")))
+
+        val feed = service.recommendationFeed(
+            viewer.id,
+            RecommendationFeedInput(chunkX = 0, chunkY = 0, sessionSeed = "stable", limit = 6),
+            socialGraph = AccountSocialGraph(followingIds = listOf(followed.id))
+        )
+
+        assertEquals(followedPost.id, feed.items.first().post.id)
+        assertTrue(feed.items.first().reasons.contains("following"))
+    }
+
+    @Test
+    fun `recommendation feed reserves exploration slots`() {
+        val service = service()
+        repeat(80) { index ->
+            service.createPost(user, CreatePostInput(text = "Post $index", tags = listOf("tag-${index % 5}")))
+        }
+
+        val feed = service.recommendationFeed(viewer.id, RecommendationFeedInput(chunkX = 0, chunkY = 0, sessionSeed = "stable", limit = 40))
+        val explorationCount = feed.items.count { "explore" in it.reasons }
+
+        assertTrue(explorationCount in 4..6)
+    }
+
+    @Test
+    fun `record post view contributes tag affinity and seen penalty`() {
+        val service = service()
+        val viewed = service.createPost(user, CreatePostInput(text = "Viewed Kotlin", tags = listOf("kotlin")))
+        val freshMatch = service.createPost(user, CreatePostInput(text = "Fresh Kotlin", tags = listOf("kotlin")))
+        service.createPost(user, CreatePostInput(text = "General", tags = listOf("general")))
+
+        service.recordPostView(viewer, viewed.id, 1200)
+        val feed = service.recommendationFeed(viewer.id, RecommendationFeedInput(chunkX = 0, chunkY = 0, sessionSeed = "stable", limit = 6))
+
+        assertEquals(freshMatch.id, feed.items.first().post.id)
+        assertTrue(feed.items.first().reasons.contains("tag-affinity"))
+        assertTrue(feed.items.first { it.post.id == viewed.id }.reasons.contains("seen-before"))
+    }
+
+    @Test
     fun `stories feed enriches authors and filters close friends visibility`() {
         val service = service()
         service.createStory(user, CreateStoryInput(blocks = listOf(textBlock("Public")), visibility = Visibility.PUBLIC))

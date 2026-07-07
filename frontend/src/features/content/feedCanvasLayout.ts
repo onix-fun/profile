@@ -1,82 +1,106 @@
-import type { CanvasPostNode, FeedItem } from "@/api/types";
+import type { CanvasPostNode, ContentBlock, FeedItem, RecommendationFeedResponse } from "@/api/types";
 
-const CANVAS_CENTER = 2400;
-const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
-const COLLISION_GAP = 8;
+export const FEED_CHUNK_SIZE = 1120;
+export const FEED_PREFETCH_RADIUS = 1;
+export const FEED_KEEP_RADIUS = 2;
+export const FEED_CHUNK_LIMIT = 12;
 
-function hash(value: string): number {
-  let result = 2166136261;
-  for (let index = 0; index < value.length; index += 1) {
-    result ^= value.charCodeAt(index);
-    result = Math.imul(result, 16777619);
-  }
-  return result >>> 0;
+const FEED_CELL_WIDTH = 320;
+const FEED_CELL_HEIGHT = 276;
+const FEED_NODE_WIDTH = 280;
+const FEED_NODE_HEIGHT = 238;
+const COLLISION_GAP = 16;
+
+export interface FeedCamera {
+  x: number;
+  y: number;
 }
 
-function mediaType(item: FeedItem): CanvasPostNode["mediaType"] {
+export interface FeedChunkCoord {
+  x: number;
+  y: number;
+}
+
+function mediaType(item: FeedItem): ContentBlock["type"] | "TEXT" {
   return item.post.blocks.find((block) => block.type !== "TEXT")?.type ?? "TEXT";
 }
 
-function nodeSize(type: CanvasPostNode["mediaType"], score: number): Pick<CanvasPostNode, "width" | "height" | "emphasis"> {
-  if (score >= 80 || type === "VIDEO") return { width: 224, height: 224, emphasis: "hero" };
-  if (type === "IMAGE") return { width: 196, height: 196, emphasis: "standard" };
-  if (type === "AUDIO" || type === "FILE") return { width: 250, height: 84, emphasis: "standard" };
-  return { width: 214, height: 142, emphasis: "compact" };
+function fallbackCell(index: number) {
+  return { q: index % 3, r: Math.floor(index / 3) };
 }
 
-export function buildFeedCanvasNodes(items: FeedItem[]): CanvasPostNode[] {
-  const placed: CanvasPostNode[] = [];
-  items.forEach((item, index) => {
-    const idHash = hash(item.post.id);
-    const rank = index + 1;
-    const score = Number.isFinite(item.score) ? item.score : 0;
-    const radius = 48 + Math.sqrt(rank) * 68 + (100 - Math.min(score, 100)) * 0.32;
-    const angle = rank * GOLDEN_ANGLE + (idHash % 360) * Math.PI / 180;
-    const jitterX = (idHash % 32) - 16;
-    const jitterY = ((idHash >>> 8) % 30) - 15;
-    const type = mediaType(item);
-    const size = nodeSize(type, score);
-    const node = resolveCollision({
-      id: item.post.id,
-      item,
-      x: Math.round(CANVAS_CENTER + Math.cos(angle) * radius + jitterX),
-      y: Math.round(CANVAS_CENTER + Math.sin(angle) * radius + jitterY),
-      mediaType: type,
-      ...size,
-    }, placed);
-
-    placed.push(node);
-  });
-  return placed;
+export function feedChunkKey(x: number, y: number): string {
+  return `${x}:${y}`;
 }
 
-export function initialCanvasScroll(viewportWidth: number, viewportHeight: number) {
+export function cameraChunk(camera: FeedCamera): FeedChunkCoord {
   return {
-    left: Math.max(0, CANVAS_CENTER - viewportWidth / 2),
-    top: Math.max(0, CANVAS_CENTER - viewportHeight / 2),
+    x: Math.floor(camera.x / FEED_CHUNK_SIZE),
+    y: Math.floor(camera.y / FEED_CHUNK_SIZE),
   };
 }
 
-function resolveCollision(node: CanvasPostNode, placed: CanvasPostNode[]): CanvasPostNode {
-  let next = node;
-  for (let attempt = 0; attempt < 900 && placed.some((item) => overlaps(item, next)); attempt += 1) {
-    const ring = Math.ceil((attempt + 1) / 14);
-    const angle = (attempt + 1) * GOLDEN_ANGLE;
-    const distance = ring * (COLLISION_GAP + 14);
-    next = {
-      ...node,
-      x: Math.round(node.x + Math.cos(angle) * distance),
-      y: Math.round(node.y + Math.sin(angle) * distance),
-    };
+export function requiredFeedChunks(camera: FeedCamera, radius = FEED_PREFETCH_RADIUS): FeedChunkCoord[] {
+  const center = cameraChunk(camera);
+  const chunks: FeedChunkCoord[] = [];
+  for (let y = center.y - radius; y <= center.y + radius; y += 1) {
+    for (let x = center.x - radius; x <= center.x + radius; x += 1) {
+      chunks.push({ x, y });
+    }
   }
-  return next;
+  return chunks;
+}
+
+export function shouldKeepFeedChunk(key: string, camera: FeedCamera, radius = FEED_KEEP_RADIUS): boolean {
+  const [xRaw, yRaw] = key.split(":");
+  const x = Number(xRaw);
+  const y = Number(yRaw);
+  const center = cameraChunk(camera);
+  return Number.isFinite(x)
+    && Number.isFinite(y)
+    && Math.abs(x - center.x) <= radius
+    && Math.abs(y - center.y) <= radius;
+}
+
+export function buildRecommendationCanvasNodes(chunks: RecommendationFeedResponse[]): CanvasPostNode[] {
+  return chunks.flatMap((chunk) => chunk.items.map((item, index) => {
+    const cell = item.cell || fallbackCell(index);
+    return {
+      id: item.post.id,
+      item,
+      chunkKey: feedChunkKey(chunk.chunkX, chunk.chunkY),
+      cell,
+      x: Math.round(chunk.chunkX * FEED_CHUNK_SIZE + 72 + cell.q * FEED_CELL_WIDTH + (cell.r % 2) * (FEED_CELL_WIDTH / 2)),
+      y: Math.round(chunk.chunkY * FEED_CHUNK_SIZE + 48 + cell.r * FEED_CELL_HEIGHT),
+      width: FEED_NODE_WIDTH,
+      height: FEED_NODE_HEIGHT,
+      mediaType: mediaType(item),
+      emphasis: item.emphasis,
+    };
+  }));
+}
+
+export function buildFeedCanvasNodes(items: FeedItem[]): CanvasPostNode[] {
+  return buildRecommendationCanvasNodes([{
+    chunkX: 0,
+    chunkY: 0,
+    sessionSeed: "test",
+    items: items.map((item, index) => ({
+      ...item,
+      cell: fallbackCell(index),
+      emphasis: item.score >= 80 ? "hero" : item.score >= 30 ? "standard" : "compact",
+    })),
+  }]);
+}
+
+export function screenPosition(node: Pick<CanvasPostNode, "x" | "y">, camera: FeedCamera, viewportWidth: number, viewportHeight: number) {
+  return {
+    left: node.x - camera.x + viewportWidth / 2,
+    top: node.y - camera.y + viewportHeight / 2,
+  };
 }
 
 export function feedNodesOverlap(a: Pick<CanvasPostNode, "x" | "y" | "width" | "height">, b: Pick<CanvasPostNode, "x" | "y" | "width" | "height">): boolean {
-  return overlaps(a, b);
-}
-
-function overlaps(a: Pick<CanvasPostNode, "x" | "y" | "width" | "height">, b: Pick<CanvasPostNode, "x" | "y" | "width" | "height">): boolean {
   return a.x < b.x + b.width + COLLISION_GAP
     && a.x + a.width + COLLISION_GAP > b.x
     && a.y < b.y + b.height + COLLISION_GAP
