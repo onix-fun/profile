@@ -1,22 +1,40 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { RouterLink, useRoute, useRouter } from "vue-router";
 import { useToast } from "primevue/usetoast";
 import { ContentService } from "@/api/contentService";
-import { stripMediaReferences } from "@/features/display/displayText";
 import type { CommentItem, ContentBlock, FeedItem } from "@/api/types";
+import ContentDocument from "@/features/contentDocument/ContentDocument.vue";
+import ContentEditor from "@/features/contentDocument/ContentEditor.vue";
+import {
+  buildContentBlocks,
+  filesFromAttachments,
+  type ContentAttachment,
+} from "@/features/contentDocument/contentModel";
 
 const route = useRoute();
 const router = useRouter();
 const toast = useToast();
 const post = ref<FeedItem["post"] | null>(null);
 const comments = ref<CommentItem[]>([]);
-const commentText = ref("");
-const replyDraft = ref<Record<string, string>>({});
+const commentMarkdown = ref("");
+const commentAttachments = ref<ContentAttachment[]>([]);
 const isLoading = ref(true);
 const isTogglingLike = ref(false);
+const isSendingComment = ref(false);
+const commentsOpen = ref(true);
 
 const postId = computed(() => String(route.params.postId || ""));
+const allowComments = computed(() => post.value?.allowComments !== false);
+const postBlocks = computed(() => post.value?.blocks || []);
+const postMarkdown = computed(() => {
+  const fromBlocks = ContentService.textFromBlocks(postBlocks.value);
+  return fromBlocks || post.value?.text || "";
+});
+const author = computed(() => post.value?.author || null);
+const authorName = computed(() => author.value?.username || post.value?.authorName || "User");
+const authorInitial = computed(() => authorName.value.slice(0, 1).toUpperCase());
+const sortedComments = computed(() => [...comments.value].sort((a, b) => Date.parse(a.createdAt || "") - Date.parse(b.createdAt || "")));
 
 onMounted(async () => {
   await loadPost();
@@ -37,17 +55,38 @@ function close() {
   void router.push("/");
 }
 
-function blockText(block: ContentBlock): string {
-  const value = block.data.text;
-  return typeof value === "string" ? stripMediaReferences(value) : "";
+function relativeTime(value?: string | null): string {
+  if (!value) return "";
+  const diff = Date.now() - Date.parse(value);
+  if (!Number.isFinite(diff)) return "";
+  const minutes = Math.max(0, Math.floor(diff / 60000));
+  if (minutes < 1) return "now";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
 }
 
-function blockSource(block: ContentBlock): string {
-  return ContentService.mediaSource(block);
+function commentAuthor(comment: CommentItem) {
+  return comment.author || null;
 }
 
-function postText(): string {
-  return stripMediaReferences(post.value?.text || "");
+function commentAuthorName(comment: CommentItem): string {
+  return commentAuthor(comment)?.username || comment.authorName || "user";
+}
+
+function commentMarkdownValue(comment: CommentItem): string {
+  return ContentService.textFromBlocks(comment.blocks || []) || comment.text || "";
+}
+
+function commentBlocks(comment: CommentItem): ContentBlock[] {
+  return comment.blocks || [];
+}
+
+function mention(comment: CommentItem) {
+  const next = `@${commentAuthorName(comment)} `;
+  commentMarkdown.value = commentMarkdown.value.startsWith(next) ? commentMarkdown.value : `${next}${commentMarkdown.value}`;
+  commentsOpen.value = true;
 }
 
 async function toggleLike() {
@@ -69,307 +108,420 @@ async function toggleLike() {
   }
 }
 
-async function sendComment(parentId?: string) {
-  const text = (parentId ? replyDraft.value[parentId] : commentText.value).trim();
-  if (!text) return;
+async function toggleCommentLike(comment: CommentItem) {
   try {
-    const created = await ContentService.createComment({ postId: postId.value, parentId, text });
-    const item: CommentItem = { ...created, postId: postId.value, parentId, text };
-    if (parentId) {
-      comments.value = comments.value.map((comment) => comment.id === parentId
-        ? { ...comment, replies: [...(comment.replies || []), item] }
-        : comment);
-      replyDraft.value[parentId] = "";
-    } else {
-      comments.value = [...comments.value, { ...item, replies: [] }];
-      commentText.value = "";
-    }
+    const next = comment.likedByViewer
+      ? await ContentService.unlikeComment(comment.id)
+      : await ContentService.likeComment(comment.id);
+    comments.value = comments.value.map((item) => item.id === comment.id
+      ? { ...item, likedByViewer: next.liked, likeCount: next.likeCount }
+      : item);
+  } catch (error) {
+    toast.add({ severity: "error", summary: "Comment like", detail: error instanceof Error ? error.message : "Unable to update like", life: 5000 });
+  }
+}
+
+async function sendComment() {
+  if (!allowComments.value || isSendingComment.value) return;
+  const text = commentMarkdown.value.trim();
+  if (!text && commentAttachments.value.length === 0) return;
+  isSendingComment.value = true;
+  try {
+    const blocks = buildContentBlocks(text, commentAttachments.value);
+    const created = await ContentService.createCommentWithFiles(
+      { postId: postId.value, text, blocks },
+      filesFromAttachments(commentAttachments.value),
+    );
+    comments.value = [...comments.value, created];
+    commentMarkdown.value = "";
+    commentAttachments.value.forEach((attachment) => {
+      if (attachment.url.startsWith("blob:")) URL.revokeObjectURL(attachment.url);
+    });
+    commentAttachments.value = [];
   } catch (error) {
     toast.add({ severity: "error", summary: "Comment", detail: error instanceof Error ? error.message : "Unable to comment", life: 5000 });
+  } finally {
+    isSendingComment.value = false;
   }
 }
 </script>
 
 <template>
-  <section class="post-overlay" role="dialog" aria-modal="true" aria-label="Post">
-    <button type="button" class="overlay-backdrop" aria-label="Close post" @click="close"></button>
-    <article class="post-panel">
-      <button type="button" class="close-button" aria-label="Close" @click="close">
-        <i class="pi pi-times"></i>
-      </button>
+  <section class="post-page" aria-label="Post">
+    <button type="button" class="close-button" aria-label="Close" @click="close">
+      <i class="pi pi-times"></i>
+    </button>
 
-      <div v-if="isLoading" class="post-state">Loading post</div>
-      <div v-else-if="!post" class="post-state">
-        <strong>Post not found</strong>
-        <button type="button" @click="close">Back to canvas</button>
-      </div>
-      <template v-else>
-        <header class="post-header">
-          <h1 v-if="post.title">{{ post.title }}</h1>
-          <p>{{ postText() }}</p>
-          <button
-            type="button"
-            class="like-button"
-            :class="{ active: post.likedByViewer }"
-            :disabled="isTogglingLike"
-            @click="toggleLike"
-          >
-            <i :class="post.likedByViewer ? 'pi pi-heart-fill' : 'pi pi-heart'"></i>
-            <span>{{ post.likeCount || 0 }}</span>
+    <div v-if="isLoading" class="post-state">Loading post</div>
+    <div v-else-if="!post" class="post-state">
+      <strong>Post not found</strong>
+      <button type="button" @click="close">Back to canvas</button>
+    </div>
+
+    <template v-else>
+      <main class="post-document-shell">
+        <article class="post-document">
+          <ContentDocument :markdown="postMarkdown" :blocks="postBlocks" mode="post" />
+        </article>
+      </main>
+
+      <aside class="comments-panel" :class="{ open: commentsOpen }" aria-label="Post details and comments">
+        <header class="author-card">
+          <RouterLink class="author-card__avatar" :to="`/u/${authorName}`">
+            <img v-if="author?.avatarUrl" :src="author.avatarUrl" alt="" />
+            <span v-else>{{ authorInitial }}</span>
+          </RouterLink>
+          <div>
+            <RouterLink :to="`/u/${authorName}`">{{ author?.firstName || authorName }}</RouterLink>
+            <span>@{{ authorName }}</span>
+          </div>
+          <button type="button" aria-label="Toggle comments" @click="commentsOpen = !commentsOpen">
+            <i class="pi pi-chevron-down"></i>
           </button>
         </header>
 
-        <div class="post-blocks">
-          <section v-for="block in post.blocks" :key="block.id || `${block.type}-${blockText(block)}`" class="post-block" :class="`post-block--${block.type.toLowerCase()}`">
-            <p v-if="block.type === 'TEXT'">{{ blockText(block) }}</p>
-            <img v-else-if="block.type === 'IMAGE' && blockSource(block)" :src="blockSource(block)" alt="" />
-            <video v-else-if="block.type === 'VIDEO' && blockSource(block)" :src="blockSource(block)" controls />
-            <audio v-else-if="block.type === 'AUDIO' && blockSource(block)" :src="blockSource(block)" controls />
-            <div v-else class="media-placeholder">
-              <i :class="block.type === 'AUDIO' ? 'pi pi-volume-up' : block.type === 'VIDEO' ? 'pi pi-video' : 'pi pi-image'"></i>
-              <span>{{ block.type.toLowerCase() }} block</span>
-            </div>
-          </section>
-        </div>
+        <section class="post-actions" aria-label="Post reactions">
+          <button type="button" :class="{ active: post.likedByViewer }" :disabled="isTogglingLike" @click="toggleLike">
+            <i :class="post.likedByViewer ? 'pi pi-heart-fill' : 'pi pi-heart'"></i>
+            <span>{{ post.likeCount || 0 }}</span>
+          </button>
+          <button type="button" @click="commentsOpen = !commentsOpen">
+            <i class="pi pi-comments"></i>
+            <span>{{ comments.length }}</span>
+          </button>
+        </section>
 
-        <footer class="post-tags">
-          <span v-for="tag in post.tags" :key="tag">#{{ tag }}</span>
-        </footer>
+        <section class="comment-composer">
+          <ContentEditor
+            v-if="allowComments"
+            v-model="commentMarkdown"
+            :attachments="commentAttachments"
+            compact
+            placeholder="Comment with Markdown, mentions, and files."
+            @update:attachments="commentAttachments = $event"
+          />
+          <p v-else class="comments-disabled">Comments are closed for this post.</p>
+          <button v-if="allowComments" type="button" class="send-comment" :disabled="isSendingComment" @click="sendComment">
+            <i class="pi pi-send"></i>
+            <span>{{ isSendingComment ? "Sending" : "Send" }}</span>
+          </button>
+        </section>
 
-        <section class="comments-panel" aria-label="Comments">
-          <form class="comment-form" @submit.prevent="sendComment()">
-            <input v-model="commentText" type="text" placeholder="Add a comment" />
-            <button type="submit"><i class="pi pi-send"></i></button>
-          </form>
-
-          <article v-for="comment in comments" :key="comment.id" class="comment-item">
-            <p>{{ comment.text }}</p>
-            <form class="reply-form" @submit.prevent="sendComment(comment.id)">
-              <input v-model="replyDraft[comment.id]" type="text" placeholder="Reply" />
-              <button type="submit">Reply</button>
-            </form>
-            <div v-if="comment.replies?.length" class="reply-list">
-              <p v-for="reply in comment.replies" :key="reply.id">{{ reply.text }}</p>
+        <section class="comment-list">
+          <article v-for="comment in sortedComments" :key="comment.id" class="comment-item">
+            <RouterLink class="comment-item__avatar" :to="`/u/${commentAuthorName(comment)}`">
+              <img v-if="commentAuthor(comment)?.avatarUrl" :src="commentAuthor(comment)?.avatarUrl || ''" alt="" />
+              <span v-else>{{ commentAuthorName(comment).slice(0, 1).toUpperCase() }}</span>
+            </RouterLink>
+            <div class="comment-item__body">
+              <header>
+                <RouterLink :to="`/u/${commentAuthorName(comment)}`">{{ commentAuthor(comment)?.firstName || commentAuthorName(comment) }}</RouterLink>
+                <span>@{{ commentAuthorName(comment) }}</span>
+                <time>{{ relativeTime(comment.createdAt) }}</time>
+                <button type="button" class="comment-menu" title="Comment menu">
+                  <i class="pi pi-ellipsis-v"></i>
+                </button>
+              </header>
+              <ContentDocument :markdown="commentMarkdownValue(comment)" :blocks="commentBlocks(comment)" mode="comment" />
+              <footer>
+                <button type="button" :class="{ active: comment.likedByViewer }" @click="toggleCommentLike(comment)">
+                  <i :class="comment.likedByViewer ? 'pi pi-heart-fill' : 'pi pi-heart'"></i>
+                  <span>{{ comment.likeCount || 0 }}</span>
+                </button>
+                <button type="button" title="Mention" @click="mention(comment)">
+                  <i class="pi pi-arrow-right"></i>
+                </button>
+              </footer>
             </div>
           </article>
         </section>
-      </template>
-    </article>
+      </aside>
+    </template>
   </section>
 </template>
 
 <style scoped>
-.post-overlay {
+.post-page {
   position: fixed;
   z-index: 120;
   inset: 0;
   display: grid;
-  place-items: center;
-  padding: 88px 18px 28px;
-}
-
-.overlay-backdrop {
-  position: absolute;
-  inset: 0;
-  border: 0;
-  background: rgba(248, 250, 252, 0.72);
-  backdrop-filter: blur(10px);
-  cursor: zoom-out;
-}
-
-.post-panel {
-  position: relative;
-  z-index: 1;
-  width: min(880px, 100%);
-  max-height: calc(100dvh - 116px);
-  overflow: auto;
-  border: 1px solid rgba(15, 23, 42, 0.1);
-  border-radius: 14px;
-  padding: 24px;
-  background: #ffffff;
-  box-shadow: 0 36px 90px rgba(15, 23, 42, 0.24);
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 420px);
+  background: #f8fafc;
+  overflow: hidden;
 }
 
 .close-button {
-  position: sticky;
-  top: 0;
-  float: right;
-  width: 38px;
-  height: 38px;
+  position: fixed;
+  z-index: 6;
+  top: 22px;
+  left: 22px;
+  width: 42px;
+  height: 42px;
   border: 0;
   border-radius: 999px;
   background: #111827;
   color: #ffffff;
   cursor: pointer;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.22);
 }
 
-.post-header {
-  display: grid;
-  gap: 8px;
-  padding-right: 46px;
+.post-document-shell {
+  min-width: 0;
+  height: 100dvh;
+  overflow: auto;
+  padding: 82px clamp(20px, 7vw, 112px) 60px;
 }
 
-.like-button {
-  width: max-content;
-  min-height: 38px;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  border: 1px solid #e2e8f0;
-  border-radius: 999px;
-  padding: 0 14px;
-  background: #ffffff;
-  color: #111827;
-  font: inherit;
-  font-weight: 900;
-  cursor: pointer;
-}
-
-.like-button.active {
-  border-color: rgba(225, 29, 72, 0.24);
-  color: #e11d48;
-  background: #fff1f2;
-}
-
-.like-button:disabled {
-  cursor: default;
-  opacity: 0.68;
-}
-
-.post-header span,
-.post-tags span {
-  color: #64748b;
-  font-size: 12px;
-  font-weight: 900;
-  text-transform: uppercase;
-}
-
-.post-header h1 {
-  margin: 0;
-  color: #111827;
-  font-size: clamp(28px, 4vw, 44px);
-  line-height: 1.05;
-  letter-spacing: 0;
-}
-
-.post-header p {
-  margin: 0;
-  color: #475569;
-  font-size: 16px;
-  font-weight: 600;
-}
-
-.post-blocks {
-  display: grid;
-  gap: 14px;
-  margin-top: 22px;
-}
-
-.post-block {
-  overflow: hidden;
-  border-radius: 10px;
-  background: #f8fafc;
-}
-
-.post-block p {
-  margin: 0;
-  padding: 18px;
-  color: #111827;
-  font-size: 18px;
-  line-height: 1.5;
-}
-
-.post-block img,
-.post-block video {
-  width: 100%;
-  max-height: 520px;
-  display: block;
-  object-fit: cover;
-}
-
-.post-block audio {
-  width: calc(100% - 28px);
-  margin: 14px;
-}
-
-.media-placeholder {
-  min-height: 180px;
-  display: grid;
-  place-items: center;
-  gap: 8px;
-  color: #ffffff;
-  background: linear-gradient(135deg, #111827, #334155);
-  font-weight: 900;
-}
-
-.post-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 18px;
+.post-document {
+  width: min(860px, 100%);
+  margin: 0 auto;
+  padding: clamp(26px, 5vw, 58px);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.08);
 }
 
 .comments-panel {
+  height: 100dvh;
   display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  gap: 14px;
+  padding: 20px 18px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: -20px 0 52px rgba(15, 23, 42, 0.1);
+  overflow: hidden;
+}
+
+.author-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
   gap: 12px;
-  margin-top: 24px;
-  padding-top: 18px;
-  border-top: 1px solid #e2e8f0;
 }
 
-.comment-form,
-.reply-form {
-  display: flex;
-  gap: 8px;
-}
-
-.comment-form input,
-.reply-form input {
-  min-width: 0;
-  flex: 1;
-  border: 1px solid #e2e8f0;
+.author-card__avatar,
+.comment-item__avatar {
+  width: 44px;
+  height: 44px;
   border-radius: 999px;
-  padding: 10px 14px;
-  font: inherit;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: #111827;
+  color: #ffffff;
+  text-decoration: none;
+  font-weight: 900;
 }
 
-.comment-form button,
-.reply-form button,
+.author-card__avatar img,
+.comment-item__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.author-card a,
+.comment-item header a {
+  color: #111827;
+  text-decoration: none;
+  font-weight: 900;
+}
+
+.author-card span,
+.comment-item header span,
+.comment-item time {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.author-card button {
+  display: none;
+}
+
+.post-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.post-actions button,
+.send-comment,
+.comment-item footer button,
+.comment-menu,
 .post-state button {
   border: 0;
   border-radius: 999px;
-  padding: 0 14px;
   background: #111827;
   color: #ffffff;
+  font: inherit;
   font-weight: 900;
   cursor: pointer;
+}
+
+.post-actions button {
+  height: 36px;
+  min-width: 50px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 12px;
+}
+
+.post-actions button.active,
+.comment-item footer button.active {
+  color: #fb7185;
+}
+
+.comment-composer {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid rgba(15, 23, 42, 0.08);
+  padding-top: 14px;
+}
+
+.send-comment {
+  height: 38px;
+  justify-self: end;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+}
+
+.send-comment:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.comments-disabled {
+  margin: 0;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.comment-list {
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  overflow: auto;
+  padding-right: 4px;
 }
 
 .comment-item {
   display: grid;
-  gap: 8px;
-  padding: 12px;
-  border-radius: 10px;
-  background: #f8fafc;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
 }
 
-.comment-item p {
-  margin: 0;
+.comment-item__avatar {
+  width: 34px;
+  height: 34px;
+  font-size: 13px;
 }
 
-.reply-list {
+.comment-item__body {
+  min-width: 0;
   display: grid;
+  gap: 5px;
+}
+
+.comment-item header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
   gap: 6px;
-  margin-left: 18px;
+}
+
+.comment-menu {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  color: #64748b;
+}
+
+.comment-item footer {
+  display: flex;
+  gap: 4px;
+}
+
+.comment-item footer button {
+  min-width: 30px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: #f1f5f9;
   color: #475569;
+  font-size: 12px;
 }
 
 .post-state {
+  grid-column: 1 / -1;
+  min-height: 100dvh;
   display: grid;
   justify-items: center;
+  align-content: center;
   gap: 12px;
-  padding: 70px 20px;
   color: #64748b;
   font-weight: 900;
+}
+
+.post-state button {
+  padding: 10px 14px;
+}
+
+@media (max-width: 880px) {
+  .post-page {
+    display: block;
+  }
+
+  .post-document-shell {
+    height: 100dvh;
+    padding: 78px 14px 154px;
+  }
+
+  .post-document {
+    padding: 24px 18px;
+  }
+
+  .comments-panel {
+    position: fixed;
+    z-index: 5;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: min(78dvh, 620px);
+    border-radius: 18px 18px 0 0;
+    transform: translateY(calc(100% - 72px));
+    transition: transform 180ms ease;
+    box-shadow: 0 -20px 52px rgba(15, 23, 42, 0.16);
+  }
+
+  .comments-panel.open {
+    transform: translateY(0);
+  }
+
+  .author-card button {
+    width: 34px;
+    height: 34px;
+    border: 0;
+    border-radius: 999px;
+    display: grid;
+    place-items: center;
+    background: #111827;
+    color: #ffffff;
+  }
 }
 </style>

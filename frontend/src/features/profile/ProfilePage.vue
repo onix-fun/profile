@@ -5,8 +5,8 @@ import { useToast } from "primevue/usetoast";
 import { apiErrorMessage } from "@/api/client";
 import { ContentService } from "@/api/contentService";
 import { ProfileService } from "@/api/profileService";
-import type { AccountProfile, ContentBlock, ProfileCanvasResponse, ProfileContentPost, SessionUser } from "@/api/types";
-import { postSnippet, stripMediaReferences } from "@/features/display/displayText";
+import type { AccountProfile, ProfileCanvasResponse, ProfileContentPost, SessionUser } from "@/api/types";
+import PostCloudNode from "@/features/content/PostCloudNode.vue";
 import {
   buildProfileCanvasLayout,
   type PositionedProfileCanvasNode,
@@ -184,31 +184,6 @@ function openPost(post: ProfileContentPost) {
 
 function openArchive() {
   void router.push(`/u/${encodeURIComponent(nickname.value)}/stories/archive`);
-}
-
-function postBlocks(post: ProfileContentPost): ContentBlock[] {
-  return post.blocks || [];
-}
-
-function firstMedia(post: ProfileContentPost): ContentBlock | undefined {
-  return postBlocks(post).find((block) => block.type !== "TEXT");
-}
-
-function postMediaSource(post: ProfileContentPost): string {
-  const media = firstMedia(post);
-  return media ? ContentService.mediaSource(media) : "";
-}
-
-function postMediaType(post: ProfileContentPost): string {
-  return firstMedia(post)?.type || "TEXT";
-}
-
-function postText(post: ProfileContentPost): string {
-  return stripMediaReferences(post.text || ContentService.textFromBlocks(postBlocks(post)) || "Media post");
-}
-
-function postTitle(post: ProfileContentPost): string {
-  return postSnippet(post);
 }
 
 async function togglePostLike(post: ProfileContentPost) {
@@ -409,36 +384,16 @@ function drawCanvas() {
                 <span>{{ nodeCaption(node) }}</span>
               </button>
 
-              <button
+              <PostCloudNode
                 v-else-if="node.type === 'post' && nodePost(node)"
                 class="canvas-node node node-post"
-                type="button"
                 :style="nodeStyle(node)"
-                @click="openPost(nodePost(node)!)"
-              >
-                <span v-if="postMediaType(nodePost(node)!) !== 'TEXT'" class="node-post-media">
-                  <img
-                    v-if="postMediaType(nodePost(node)!) === 'IMAGE' && postMediaSource(nodePost(node)!)"
-                    :src="postMediaSource(nodePost(node)!)"
-                    alt=""
-                  />
-                  <video
-                    v-else-if="postMediaType(nodePost(node)!) === 'VIDEO' && postMediaSource(nodePost(node)!)"
-                    :src="postMediaSource(nodePost(node)!)"
-                    muted
-                    playsinline
-                  />
-                  <i v-else :class="postMediaType(nodePost(node)!) === 'AUDIO' ? 'pi pi-volume-up' : 'pi pi-image'"></i>
-                </span>
-                <span class="node-post-copy">
-                  <strong>{{ postTitle(nodePost(node)!) }}</strong>
-                  <span>{{ postText(nodePost(node)!) }}</span>
-                </span>
-                <span class="node-post-meta">
-                  <small v-for="tag in nodePost(node)!.tags.slice(0, 2)" :key="tag">#{{ tag }}</small>
-                  <small><i :class="nodePost(node)!.likedByViewer ? 'pi pi-heart-fill' : 'pi pi-heart'"></i>{{ nodePost(node)!.likeCount || 0 }}</small>
-                </span>
-              </button>
+                :post="nodePost(node)!"
+                mode="profile"
+                @open="openPost(nodePost(node)!)"
+                @comments="openPost(nodePost(node)!)"
+                @like="togglePostLike(nodePost(node)!)"
+              />
             </template>
           </div>
         </div>
@@ -660,86 +615,9 @@ function drawCanvas() {
 }
 
 .node-post {
-  display: grid;
-  grid-template-rows: auto 1fr auto;
-  gap: 8px;
-  border-radius: 12px;
-  padding: 9px;
-  text-align: left;
-  cursor: pointer;
-  transition: transform 140ms ease, box-shadow 140ms ease;
-}
-
-.node-post:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 18px 42px rgba(22, 34, 51, 0.17);
-}
-
-.node-post-media {
-  height: 62px;
-  display: grid;
-  place-items: center;
-  overflow: hidden;
-  border-radius: 8px;
-  background: #111827;
-  color: #ffffff;
-}
-
-.node-post-media img,
-.node-post-media video {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.node-post-copy {
-  min-width: 0;
-  display: grid;
-  gap: 3px;
-}
-
-.node-post-copy strong {
-  overflow: hidden;
-  color: #111827;
-  font-size: 14px;
-  line-height: 1.18;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.node-post-copy span {
-  display: -webkit-box;
-  overflow: hidden;
-  color: #475569;
-  font-size: 12px;
-  font-weight: 650;
-  line-height: 1.3;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-
-.node-post-meta {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: #64748b;
-  font-size: 10px;
-  font-weight: 900;
-}
-
-.node-post-meta small {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.node-post-meta small:last-child {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .state-screen {

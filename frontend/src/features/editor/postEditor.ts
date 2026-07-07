@@ -1,11 +1,17 @@
 import type { CreatePostInput, PostBlock } from "@/api/types";
+import { isFileLikeUrl } from "@/features/display/markdown";
+import {
+  attachmentMarkdown,
+  attachmentType,
+  buildContentBlocks,
+  createAttachment,
+  extractHashtags,
+  filesFromAttachments,
+  firstMarkdownHeading,
+  type ContentAttachment,
+} from "@/features/contentDocument/contentModel";
 
-export interface PostAttachment {
-  id: string;
-  file: File;
-  url: string;
-  type: "IMAGE" | "VIDEO" | "AUDIO";
-}
+export type PostAttachment = ContentAttachment;
 
 export interface PostEditorState {
   title: string;
@@ -23,30 +29,10 @@ export const emptyPostEditorState = (): PostEditorState => ({
   allowComments: true,
 });
 
-export function extractHashtags(markdown: string): string[] {
-  return Array.from(markdown.matchAll(/(^|\s)#([\p{L}\p{N}_-]+)/gu))
-    .map((match) => match[2].toLowerCase())
-    .filter((tag, index, tags) => tags.indexOf(tag) === index)
-    .slice(0, 20);
-}
+export { attachmentMarkdown, attachmentType, createAttachment, extractHashtags, filesFromAttachments };
 
-export function attachmentType(file: File): PostAttachment["type"] {
-  if (file.type.startsWith("video/")) return "VIDEO";
-  if (file.type.startsWith("audio/")) return "AUDIO";
-  return "IMAGE";
-}
-
-export function createAttachment(file: File): PostAttachment {
-  return {
-    id: crypto.randomUUID(),
-    file,
-    url: URL.createObjectURL(file),
-    type: attachmentType(file),
-  };
-}
-
-export function attachmentMarkdown(attachment: Pick<PostAttachment, "id" | "file">): string {
-  return `[${attachment.file.name}](media:${attachment.id})`;
+export function isFileLikeMarkdownLink(label: string, href: string): boolean {
+  return isFileLikeUrl(href, label);
 }
 
 export function isPostEditorDirty(state: PostEditorState): boolean {
@@ -90,28 +76,7 @@ export function applySlashCommand(state: PostEditorState, command: string): Post
 
 export function buildCreatePostInput(state: PostEditorState): CreatePostInput {
   const markdown = state.markdown.trim();
-  const blocks: PostBlock[] = [];
-
-  if (markdown) {
-    blocks.push({
-      id: crypto.randomUUID(),
-      type: "TEXT",
-      data: { text: markdown, format: "markdown" },
-    });
-  }
-
-  state.attachments.forEach((attachment) => {
-    blocks.push({
-      id: attachment.id,
-      type: attachment.type,
-      data: {
-        fileName: attachment.file.name,
-        mimeType: attachment.file.type,
-        size: attachment.file.size,
-        markdownRef: `media:${attachment.id}`,
-      },
-    });
-  });
+  const blocks: PostBlock[] = buildContentBlocks(markdown, state.attachments);
 
   if (!markdown && state.attachments.length === 0) {
     throw new Error("Add text or attach media");
@@ -120,7 +85,7 @@ export function buildCreatePostInput(state: PostEditorState): CreatePostInput {
   const tags = Array.from(new Set([...extractHashtags(markdown), ...state.tags])).slice(0, 20);
 
   return {
-    title: state.title.trim() || undefined,
+    title: state.title.trim() || firstMarkdownHeading(markdown),
     text: markdown || state.attachments.map((attachment) => attachmentMarkdown(attachment)).join("\n"),
     blocks,
     tags,

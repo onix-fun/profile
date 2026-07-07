@@ -3,9 +3,9 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useToast } from "primevue/usetoast";
 import { ContentService } from "@/api/contentService";
-import type { CanvasPostNode, ContentBlock, FeedItem } from "@/api/types";
-import { postSnippet, stripMediaReferences } from "@/features/display/displayText";
+import type { CanvasPostNode, FeedItem } from "@/api/types";
 import { buildFeedCanvasNodes, initialCanvasScroll } from "@/features/content/feedCanvasLayout";
+import PostCloudNode from "@/features/content/PostCloudNode.vue";
 import StoryRail from "@/features/stories/StoryRail.vue";
 
 const CANVAS_SIZE = 4800;
@@ -50,6 +50,19 @@ function openPost(node: CanvasPostNode) {
   void router.push(`/p/${encodeURIComponent(node.id)}`);
 }
 
+async function toggleLike(node: CanvasPostNode) {
+  try {
+    const next = node.item.post.likedByViewer
+      ? await ContentService.unlikePost(node.id)
+      : await ContentService.likePost(node.id);
+    feed.value = feed.value.map((item) => item.post.id === node.id
+      ? { ...item, post: { ...item.post, likedByViewer: next.liked, likeCount: next.likeCount } }
+      : item);
+  } catch (error) {
+    toast.add({ severity: "error", summary: "Like", detail: error instanceof Error ? error.message : "Unable to update like", life: 5000 });
+  }
+}
+
 function rememberCanvasPosition() {
   if (!viewport.value) return;
   sessionStorage.setItem("feedCanvas", JSON.stringify({
@@ -77,20 +90,6 @@ function restoreCanvasPosition() {
   element.scrollTop = initial.top;
 }
 
-function firstMedia(node: CanvasPostNode): ContentBlock | undefined {
-  return node.item.post.blocks.find((block) => block.type !== "TEXT");
-}
-
-function mediaPreview(node: CanvasPostNode): string {
-  const media = firstMedia(node);
-  if (!media) return "";
-  return ContentService.mediaSource(media);
-}
-
-function nodeText(node: CanvasPostNode): string {
-  const text = node.item.post.text || ContentService.textFromBlocks(node.item.post.blocks);
-  return stripMediaReferences(text || postSnippet(node.item.post, "Media post"));
-}
 </script>
 
 <template>
@@ -104,30 +103,18 @@ function nodeText(node: CanvasPostNode): string {
           <span>Pan in any direction</span>
         </div>
 
-        <button
+        <PostCloudNode
           v-for="node in nodes"
           :key="node.id"
-          type="button"
           class="canvas-post"
-          :class="[`canvas-post--${node.mediaType.toLowerCase()}`, `canvas-post--${node.emphasis}`]"
+          :post="node.item.post"
+          :reasons="node.item.reasons"
+          mode="feed"
           :style="{ left: `${node.x}px`, top: `${node.y}px`, width: `${node.width}px`, minHeight: `${node.height}px` }"
-          @click="openPost(node)"
-        >
-          <span v-if="node.mediaType !== 'TEXT'" class="post-media">
-            <img v-if="node.mediaType === 'IMAGE' && mediaPreview(node)" :src="mediaPreview(node)" alt="" />
-            <video v-else-if="node.mediaType === 'VIDEO' && mediaPreview(node)" :src="mediaPreview(node)" muted playsinline />
-            <i v-else :class="node.mediaType === 'AUDIO' ? 'pi pi-volume-up' : 'pi pi-image'"></i>
-          </span>
-          <span class="post-copy">
-            <span class="post-kicker">{{ node.item.reasons.slice(0, 2).join(" / ") || "recommended" }}</span>
-            <strong>{{ postSnippet(node.item.post, "Post") }}</strong>
-            <span>{{ nodeText(node) }}</span>
-          </span>
-          <span class="post-meta">
-            <span v-for="tag in node.item.post.tags.slice(0, 3)" :key="tag">#{{ tag }}</span>
-            <small><i :class="node.item.post.likedByViewer ? 'pi pi-heart-fill' : 'pi pi-heart'"></i>{{ node.item.post.likeCount || 0 }}</small>
-          </span>
-        </button>
+          @open="openPost(node)"
+          @comments="openPost(node)"
+          @like="toggleLike(node)"
+        />
       </div>
     </div>
 
@@ -196,100 +183,6 @@ function nodeText(node: CanvasPostNode): string {
 .canvas-post {
   position: absolute;
   z-index: 2;
-  display: grid;
-  gap: 10px;
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  border-radius: 10px;
-  padding: 10px;
-  background: rgba(255, 255, 255, 0.9);
-  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.13);
-  color: #111827;
-  text-align: left;
-  cursor: pointer;
-  backdrop-filter: blur(12px);
-  transition: transform 150ms ease, box-shadow 150ms ease;
-}
-
-.canvas-post:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 26px 70px rgba(15, 23, 42, 0.18);
-}
-
-.post-media {
-  height: 120px;
-  display: grid;
-  place-items: center;
-  overflow: hidden;
-  border-radius: 8px;
-  background:
-    linear-gradient(135deg, rgba(15, 23, 42, 0.82), rgba(51, 65, 85, 0.72)),
-    radial-gradient(circle at 20% 20%, rgba(255, 255, 255, 0.28), transparent 28%);
-  color: #ffffff;
-}
-
-.canvas-post--hero .post-media {
-  height: 146px;
-}
-
-.canvas-post--audio .post-media {
-  height: 72px;
-  background: linear-gradient(135deg, #111827, #0f766e);
-}
-
-.post-media img,
-.post-media video {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.post-media i {
-  font-size: 24px;
-}
-
-.post-copy {
-  display: grid;
-  gap: 4px;
-}
-
-.post-kicker {
-  color: #64748b;
-  font-size: 11px;
-  font-weight: 900;
-  text-transform: uppercase;
-}
-
-.post-copy strong {
-  font-size: 16px;
-  line-height: 1.15;
-}
-
-.post-copy > span:last-child {
-  display: -webkit-box;
-  overflow: hidden;
-  color: #475569;
-  font-size: 13px;
-  font-weight: 600;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-}
-
-.post-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 7px;
-  color: #64748b;
-  font-size: 11px;
-  font-weight: 900;
-}
-
-.post-meta small {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font: inherit;
 }
 
 .feed-state {

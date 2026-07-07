@@ -16,6 +16,9 @@ interface ContentRepository {
     fun setStoryLike(storyId: String, userId: String, liked: Boolean)
     fun countStoryLikes(storyId: String): Long
     fun isStoryLikedBy(storyId: String, userId: String): Boolean
+    fun setCommentLike(commentId: String, userId: String, liked: Boolean)
+    fun countCommentLikes(commentId: String): Long
+    fun isCommentLikedBy(commentId: String, userId: String): Boolean
     fun saveStory(story: Story): Story
     fun findStory(id: String): Story?
     fun listActiveStories(now: Instant, limit: Int): List<Story>

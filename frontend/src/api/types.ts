@@ -45,14 +45,24 @@ export interface AccountProfile {
   relationship: Relationship;
 }
 
+export interface AccountUser {
+  id: string;
+  username: string;
+  firstName?: string | null;
+  lastName?: string | null;
+  avatarUrl?: string | null;
+}
+
 export interface ProfileContentPost {
   id: string;
   authorId?: string | null;
+  author?: AccountUser | null;
   authorName?: string | null;
   title?: string | null;
   text: string;
   blocks?: ContentBlock[];
   tags: string[];
+  allowComments?: boolean;
   likeCount?: number;
   likedByViewer?: boolean;
   createdAt?: string | null;
@@ -91,7 +101,7 @@ export interface ProfileCanvasResponse {
 
 export interface ContentBlock {
   id?: string;
-  type: "TEXT" | "IMAGE" | "VIDEO" | "AUDIO";
+  type: "TEXT" | "IMAGE" | "VIDEO" | "AUDIO" | "FILE";
   data: Record<string, unknown>;
 }
 
@@ -127,6 +137,12 @@ export interface StoryReactionState {
   likeCount: number;
 }
 
+export interface CommentReactionState {
+  commentId: string;
+  liked: boolean;
+  likeCount: number;
+}
+
 export interface CanvasPostNode {
   id: string;
   item: FeedItem;
@@ -142,9 +158,13 @@ export interface CommentItem {
   id: string;
   postId: string;
   authorId?: string;
+  author?: AccountUser | null;
   authorName?: string;
   parentId?: string | null;
   text: string;
+  blocks?: ContentBlock[];
+  likeCount?: number;
+  likedByViewer?: boolean;
   createdAt?: string | null;
   replies?: CommentItem[];
 }

@@ -3,8 +3,10 @@ import { createRouter, createMemoryHistory } from "vue-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AppShell from "@/features/shell/AppShell.vue";
 import StoryViewer from "@/features/stories/StoryViewer.vue";
-import { buildFeedCanvasNodes } from "@/features/content/feedCanvasLayout";
+import { buildFeedCanvasNodes, feedNodesOverlap } from "@/features/content/feedCanvasLayout";
 import { buildCreatePostInput, emptyPostEditorState, extractHashtags, isPostEditorDirty } from "@/features/editor/postEditor";
+import { attachmentMarkdown, mediaReferences } from "@/features/contentDocument/contentModel";
+import { isFileLikeUrl, markdownLinks } from "@/features/display/markdown";
 import { emptyStoryComposerState, mergeSeenState, reduceStoryComposer, sortStoryRail } from "@/features/stories/storyState";
 import { ProfileService } from "@/api/profileService";
 import { ContentService } from "@/api/contentService";
@@ -64,7 +66,23 @@ vi.mock("@/api/contentService", () => ({
   },
 }));
 
-function feedItem(id: string, score: number, type: "TEXT" | "IMAGE" | "VIDEO" | "AUDIO" = "TEXT"): FeedItem {
+function ensureLocalStorage() {
+  if (window.localStorage) return;
+  const storage = new Map<string, string>();
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: {
+      clear: () => storage.clear(),
+      getItem: (key: string) => storage.get(key) ?? null,
+      removeItem: (key: string) => storage.delete(key),
+      setItem: (key: string, value: string) => storage.set(key, String(value)),
+    },
+  });
+}
+
+beforeEach(() => ensureLocalStorage());
+
+function feedItem(id: string, score: number, type: "TEXT" | "IMAGE" | "VIDEO" | "AUDIO" | "FILE" = "TEXT"): FeedItem {
   return {
     post: {
       id,
@@ -89,26 +107,70 @@ describe("feed canvas layout", () => {
     expect(first[0]).toMatchObject({ id: "a", mediaType: "VIDEO", emphasis: "hero" });
     expect(first[0].x).not.toBe(first[1].x);
   });
+
+  it("keeps packed cloud nodes from overlapping", () => {
+    const nodes = buildFeedCanvasNodes(Array.from({ length: 18 }, (_, index) => (
+      feedItem(`post-${index}`, 100 - index, index % 5 === 0 ? "IMAGE" : index % 4 === 0 ? "FILE" : "TEXT")
+    )));
+
+    for (let outer = 0; outer < nodes.length; outer += 1) {
+      for (let inner = outer + 1; inner < nodes.length; inner += 1) {
+        expect(feedNodesOverlap(nodes[outer], nodes[inner])).toBe(false);
+      }
+    }
+  });
 });
 
 describe("markdown post editor", () => {
   it("maps markdown, hashtags and attachments to createPost input", () => {
     let state = emptyPostEditorState();
-    state.markdown = "Hello **canvas** #Design\n\n[clip.webm](media:local-1)";
+    state.markdown = "# Launch notes\n\nHello **canvas** #Design\n\n![[media:local-1|clip.webm]]";
     state.allowComments = false;
     state.attachments = [{
       id: "local-1",
       file: new File(["video"], "clip.webm", { type: "video/webm" }),
       url: "blob:clip",
+      name: "clip.webm",
+      mimeType: "video/webm",
+      size: 5,
       type: "VIDEO",
     }];
 
     const input = buildCreatePostInput(state);
 
+    expect(input.title).toBe("Launch notes");
     expect(input.tags).toEqual(["design"]);
     expect(input.allowComments).toBe(false);
     expect(input.text).toContain("Hello **canvas**");
     expect(input.blocks.map((block) => block.type)).toEqual(["TEXT", "VIDEO"]);
+  });
+
+  it("maps ordinary uploaded files to file blocks", () => {
+    let state = emptyPostEditorState();
+    state.markdown = "![[media:file-1|brief.pdf]]";
+    state.attachments = [{
+      id: "file-1",
+      file: new File(["pdf"], "brief.pdf", { type: "application/pdf" }),
+      url: "blob:brief",
+      name: "brief.pdf",
+      mimeType: "application/pdf",
+      size: 3,
+      type: "FILE",
+    }];
+
+    const input = buildCreatePostInput(state);
+
+    expect(input.blocks.map((block) => block.type)).toEqual(["TEXT", "FILE"]);
+    expect(input.blocks[1].data.markdownRef).toBe("media:file-1");
+  });
+
+  it("detects file-like markdown links for capsule rendering", () => {
+    const links = markdownLinks("Read [brief.pdf](https://cdn.test/brief.pdf) and [site](https://example.test) plus ![[media:file-1|clip.mov]]");
+
+    expect(isFileLikeUrl("media:file-1", "clip.mov")).toBe(true);
+    expect(links.map((link) => link.fileLike)).toEqual([true, false, true]);
+    expect(attachmentMarkdown({ id: "file-1", name: "clip.mov" })).toBe("![[media:file-1|clip.mov]]");
+    expect(mediaReferences("![[media:file-1|clip.mov]]")[0]).toMatchObject({ id: "file-1", label: "clip.mov" });
   });
 
   it("extracts unique hashtags from markdown", () => {

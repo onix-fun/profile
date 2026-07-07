@@ -104,7 +104,8 @@ fun Application.registerRoutes(config: AppConfig, account: AccountClient, media:
                     ownerId = ownerId,
                     visibility = visibility,
                     postLimit = call.request.queryParameters["postLimit"]?.toIntOrNull() ?: 12,
-                    storyLimit = call.request.queryParameters["storyLimit"]?.toIntOrNull() ?: 8
+                    storyLimit = call.request.queryParameters["storyLimit"]?.toIntOrNull() ?: 8,
+                    authorResolver = authorResolver(viewer, account, token)
                 )
             )
         }
@@ -163,8 +164,14 @@ private fun enrichUploads(request: GraphQlRequest, uploads: List<UploadedMedia>)
     val variables = request.variables ?: return request
     val input = variables["input"] as? JsonObject ?: return request
     val blocks = input["blocks"]?.jsonArray ?: return request
+    val enrichedBlocks = enrichUploadBlocks(blocks, uploads)
+    val enrichedInput = JsonObject(input + ("blocks" to JsonArray(enrichedBlocks)))
+    return request.copy(variables = JsonObject(variables + ("input" to enrichedInput)))
+}
+
+internal fun enrichUploadBlocks(blocks: JsonArray, uploads: List<UploadedMedia>): List<JsonElement> {
     var uploadIndex = 0
-    val enrichedBlocks = blocks.map { element ->
+    return blocks.map { element ->
         val block = element.jsonObject
         val type = block["type"]?.jsonPrimitive?.contentOrNull
         if (type == "TEXT" || uploadIndex >= uploads.size) return@map element
@@ -177,15 +184,17 @@ private fun enrichUploads(request: GraphQlRequest, uploads: List<UploadedMedia>)
             "size" to JsonPrimitive(upload.size)
         ))))
     }
-    val enrichedInput = JsonObject(input + ("blocks" to JsonArray(enrichedBlocks)))
-    return request.copy(variables = JsonObject(variables + ("input" to enrichedInput)))
 }
 
 private fun referenceUploads(media: MediaClient, response: GraphQlResponse, uploads: List<UploadedMedia>) {
     if (uploads.isEmpty()) return
     val data = response.data ?: return
-    val created = data["createPost"]?.jsonObject ?: data["createStory"]?.jsonObject ?: return
-    val ownerType = if (data.containsKey("createPost")) "post" else "story"
+    val created = data["createPost"]?.jsonObject ?: data["createStory"]?.jsonObject ?: data["createComment"]?.jsonObject ?: return
+    val ownerType = when {
+        data.containsKey("createPost") -> "post"
+        data.containsKey("createStory") -> "story"
+        else -> "comment"
+    }
     val ownerId = created["id"]?.jsonPrimitive?.contentOrNull ?: return
     uploads.forEach { media.createReference(it.blobId, ownerType, ownerId) }
 }
@@ -212,11 +221,11 @@ private fun dispatchGraphQl(
         "feed" -> buildJsonObject {
             val tags = variables["tags"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }?.toSet().orEmpty()
             val limit = variables["limit"]?.jsonPrimitive?.intOrNull ?: 20
-            put("feed", json.encodeToJsonElement(content.feed(user.id, tags, limit)))
+            put("feed", json.encodeToJsonElement(content.feed(user.id, tags, limit, authorResolver(user, account, token))))
         }
         "post" -> buildJsonObject {
             val id = variables["id"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("id is required")
-            put("post", json.encodeToJsonElement(content.post(id, user.id)))
+            put("post", json.encodeToJsonElement(content.post(id, user.id, authorResolver(user, account, token))))
         }
         "story" -> buildJsonObject {
             val id = variables["id"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("id is required")
@@ -252,13 +261,13 @@ private fun dispatchGraphQl(
         "comments" -> buildJsonObject {
             val postId = variables["postId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("postId is required")
             val limit = variables["limit"]?.jsonPrimitive?.intOrNull ?: 100
-            put("comments", json.encodeToJsonElement(content.comments(postId, limit)))
+            put("comments", json.encodeToJsonElement(content.comments(postId, limit, user.id, authorResolver(user, account, token))))
         }
         "profileContent" -> buildJsonObject {
             val ownerId = variables["ownerId"]?.jsonPrimitive?.content ?: user.id
             val visibility = if (account != null && token != null) account.visibility(ownerId, user.id, token)
             else AccountVisibility(ownerId = ownerId, viewerId = user.id)
-            put("profileContent", json.encodeToJsonElement(content.profileContent(ownerId, visibility, 12, 8)))
+            put("profileContent", json.encodeToJsonElement(content.profileContent(ownerId, visibility, 12, 8, authorResolver(user, account, token))))
         }
         "likePost" -> buildJsonObject {
             val postId = variables["postId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("postId is required")
@@ -276,6 +285,14 @@ private fun dispatchGraphQl(
             val storyId = variables["storyId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("storyId is required")
             put("unlikeStory", json.encodeToJsonElement(content.unlikeStory(user, storyId)))
         }
+        "likeComment" -> buildJsonObject {
+            val commentId = variables["commentId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("commentId is required")
+            put("likeComment", json.encodeToJsonElement(content.likeComment(user, commentId)))
+        }
+        "unlikeComment" -> buildJsonObject {
+            val commentId = variables["commentId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("commentId is required")
+            put("unlikeComment", json.encodeToJsonElement(content.unlikeComment(user, commentId)))
+        }
         "recordView" -> buildJsonObject {
             put(operation, true)
         }
@@ -290,7 +307,7 @@ private fun dispatchGraphQl(
 
 private fun operationFromQuery(query: String?): String? {
     if (query.isNullOrBlank()) return null
-    return listOf("createPost", "createStory", "createComment", "feed", "post", "storyGroup", "storyArchive", "story", "storiesFeed", "comments", "profileContent", "likePost", "unlikePost", "likeStory", "unlikeStory", "recordView", "recordStoryView")
+    return listOf("createPost", "createStory", "createComment", "feed", "post", "storyGroup", "storyArchive", "story", "storiesFeed", "comments", "profileContent", "likePost", "unlikePost", "likeStory", "unlikeStory", "likeComment", "unlikeComment", "recordView", "recordStoryView")
         .firstOrNull { query.contains(it) }
 }
 

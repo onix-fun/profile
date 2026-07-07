@@ -1,0 +1,2 @@
+ALTER TABLE content.posts
+    ADD COLUMN IF NOT EXISTS allow_comments BOOLEAN NOT NULL DEFAULT TRUE;

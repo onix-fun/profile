@@ -13,6 +13,7 @@ class InMemoryContentRepository : ContentRepository {
     private val comments = ConcurrentHashMap<String, Comment>()
     private val postLikes = ConcurrentHashMap.newKeySet<Pair<String, String>>()
     private val storyLikes = ConcurrentHashMap.newKeySet<Pair<String, String>>()
+    private val commentLikes = ConcurrentHashMap.newKeySet<Pair<String, String>>()
     private val storyViews = ConcurrentHashMap<String, Instant>()
 
     override fun savePost(post: Post): Post {
@@ -55,6 +56,17 @@ class InMemoryContentRepository : ContentRepository {
 
     override fun isStoryLikedBy(storyId: String, userId: String): Boolean =
         storyLikes.contains(storyId to userId)
+
+    override fun setCommentLike(commentId: String, userId: String, liked: Boolean) {
+        val key = commentId to userId
+        if (liked) commentLikes.add(key) else commentLikes.remove(key)
+    }
+
+    override fun countCommentLikes(commentId: String): Long =
+        commentLikes.count { it.first == commentId }.toLong()
+
+    override fun isCommentLikedBy(commentId: String, userId: String): Boolean =
+        commentLikes.contains(commentId to userId)
 
     override fun saveStory(story: Story): Story {
         stories[story.id] = story

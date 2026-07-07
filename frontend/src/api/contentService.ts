@@ -3,6 +3,7 @@ import { refreshBrowserSession } from "@/api/client";
 import { redirectToAccount } from "@/api/authRedirect";
 import type {
   CommentItem,
+  CommentReactionState,
   ContentBlock,
   CreatePostInput,
   CreateStoryInput,
@@ -197,14 +198,31 @@ export class ContentService {
     return data.unlikeStory;
   }
 
-  static async createComment(input: { postId: string; parentId?: string; text: string }) {
-    const data = await request<{ createComment: { id: string; text: string } }>("createComment", { input });
+  static async createComment(input: { postId: string; text: string; blocks?: ContentBlock[] }) {
+    const data = await request<{ createComment: CommentItem }>("createComment", { input });
+    return data.createComment;
+  }
+
+  static async createCommentWithFiles(input: { postId: string; text: string; blocks: ContentBlock[] }, files: File[] = []): Promise<CommentItem> {
+    const data = files.length
+      ? await multipartRequest<{ createComment: CommentItem }>("createComment", { input }, files)
+      : await request<{ createComment: CommentItem }>("createComment", { input });
     return data.createComment;
   }
 
   static async comments(postId: string): Promise<CommentItem[]> {
     const data = await request<{ comments: CommentItem[] }>("comments", { postId });
     return data.comments;
+  }
+
+  static async likeComment(commentId: string): Promise<CommentReactionState> {
+    const data = await request<{ likeComment: CommentReactionState }>("likeComment", { commentId });
+    return data.likeComment;
+  }
+
+  static async unlikeComment(commentId: string): Promise<CommentReactionState> {
+    const data = await request<{ unlikeComment: CommentReactionState }>("unlikeComment", { commentId });
+    return data.unlikeComment;
   }
 
   static textFromBlocks(blocks: ContentBlock[]): string {

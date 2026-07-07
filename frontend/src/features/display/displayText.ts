@@ -15,7 +15,9 @@ export function safeDisplayText(value: unknown, fallback: string): string {
 }
 
 export function stripMediaReferences(value: string): string {
-  return value.replace(/\[([^\]]+)\]\(media:[^)]+\)/g, "$1");
+  return value
+    .replace(/!\[\[media:[^|\]]+(?:\|([^\]]+))?\]\]/g, "$1")
+    .replace(/\[([^\]]+)\]\(media:[^)]+\)/g, "$1");
 }
 
 export function displayUsername(value: unknown, fallback = "User"): string {
@@ -38,5 +40,6 @@ export function postSnippet(post: Pick<ProfileContentPost, "title" | "text" | "b
   if (text) return text.slice(0, 96);
 
   const media = post.blocks?.find((block) => block.type !== "TEXT");
-  return media ? mediaFileName(media) : fallback;
+  if (!media) return fallback;
+  return media.type === "FILE" || media.type === "AUDIO" ? mediaFileName(media) : fallback;
 }

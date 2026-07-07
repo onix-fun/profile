@@ -1,10 +1,15 @@
 package com.onix.content
 
+import com.onix.content.api.enrichUploadBlocks
 import com.onix.content.domain.*
+import com.onix.content.media.UploadedMedia
 import com.onix.content.service.ContentService
 import com.onix.content.service.InMemoryContentRepository
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -18,16 +23,105 @@ class ContentServiceTest {
     private val viewer = SessionUser(id = "22222222-2222-2222-2222-222222222222", username = "viewer")
 
     @Test
-    fun `comments allow one reply level only`() {
+    fun `comments are linear even when legacy parent id is sent`() {
         val service = service()
         val post = service.createPost(user, CreatePostInput(text = "Hello", tags = listOf("kotlin")))
         val root = service.createComment(viewer, CreateCommentInput(postId = post.id, text = "Root"))
         val reply = service.createComment(user, CreateCommentInput(postId = post.id, parentId = root.id, text = "Reply"))
 
-        assertEquals(root.id, reply.parentId)
-        assertFailsWith<IllegalArgumentException> {
-            service.createComment(viewer, CreateCommentInput(postId = post.id, parentId = reply.id, text = "Nested"))
+        assertEquals(null, root.parentId)
+        assertEquals(null, reply.parentId)
+    }
+
+    @Test
+    fun `comments can be disabled per post`() {
+        val service = service()
+        val post = service.createPost(user, CreatePostInput(text = "No replies", allowComments = false))
+
+        val error = assertFailsWith<IllegalArgumentException> {
+            service.createComment(viewer, CreateCommentInput(postId = post.id, text = "Blocked"))
         }
+
+        assertEquals("Comments are disabled for this post", error.message)
+    }
+
+    @Test
+    fun `file blocks are accepted for posts`() {
+        val service = service()
+        val post = service.createPost(user, CreatePostInput(
+            text = "[brief.pdf](media:file-1)",
+            blocks = listOf(
+                textBlock("[brief.pdf](media:file-1)"),
+                ContentBlock(
+                    id = "33333333-3333-3333-3333-333333333333",
+                    type = ContentBlockType.FILE,
+                    data = JsonObject(mapOf(
+                        "fileName" to JsonPrimitive("brief.pdf"),
+                        "mimeType" to JsonPrimitive("application/pdf"),
+                        "markdownRef" to JsonPrimitive("media:file-1")
+                    ))
+                )
+            )
+        ))
+
+        assertEquals(ContentBlockType.FILE, post.blocks.last().type)
+        assertEquals("brief.pdf", post.blocks.last().data["fileName"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `comments accept markdown blocks and files`() {
+        val service = service()
+        val post = service.createPost(user, CreatePostInput(text = "Hello"))
+        val comment = service.createComment(viewer, CreateCommentInput(
+            postId = post.id,
+            text = "Nice ![[media:file-1|brief.pdf]]",
+            blocks = listOf(
+                textBlock("Nice ![[media:file-1|brief.pdf]]"),
+                ContentBlock(
+                    id = "33333333-3333-3333-3333-333333333333",
+                    type = ContentBlockType.FILE,
+                    data = JsonObject(mapOf(
+                        "fileName" to JsonPrimitive("brief.pdf"),
+                        "mimeType" to JsonPrimitive("application/pdf"),
+                        "markdownRef" to JsonPrimitive("media:file-1")
+                    ))
+                )
+            )
+        ))
+
+        assertEquals(2, comment.blocks.size)
+        assertEquals(ContentBlockType.FILE, comment.blocks.last().type)
+    }
+
+    @Test
+    fun `multipart upload enrichment fills file block metadata`() {
+        val blocks = JsonArray(listOf(
+            textBlock("See [brief.pdf](media:file-1)").let {
+                JsonObject(mapOf(
+                    "id" to JsonPrimitive(it.id),
+                    "type" to JsonPrimitive(it.type.name),
+                    "data" to it.data
+                ))
+            },
+            JsonObject(mapOf(
+                "id" to JsonPrimitive("33333333-3333-3333-3333-333333333333"),
+                "type" to JsonPrimitive(ContentBlockType.FILE.name),
+                "data" to JsonObject(mapOf("markdownRef" to JsonPrimitive("media:file-1")))
+            ))
+        ))
+
+        val enriched = enrichUploadBlocks(blocks, listOf(UploadedMedia(
+            fileName = "brief.pdf",
+            mimeType = "application/pdf",
+            size = 42,
+            blobId = "44444444-4444-4444-4444-444444444444"
+        )))
+
+        val fileData = enriched.last().jsonObject["data"]!!.jsonObject
+        assertEquals("44444444-4444-4444-4444-444444444444", fileData["blobId"]?.jsonPrimitive?.content)
+        assertEquals("brief.pdf", fileData["fileName"]?.jsonPrimitive?.content)
+        assertEquals("application/pdf", fileData["mimeType"]?.jsonPrimitive?.content)
+        assertEquals(JsonPrimitive(42L), fileData["size"])
     }
 
     @Test
@@ -193,6 +287,45 @@ class ContentServiceTest {
         assertEquals(true, loaded?.likedByViewer)
         assertEquals(false, unliked.liked)
         assertEquals(0L, unliked.likeCount)
+    }
+
+    @Test
+    fun `comment likes are idempotent and returned with viewer state`() {
+        val service = service()
+        val post = service.createPost(user, CreatePostInput(text = "Likeable"))
+        val comment = service.createComment(user, CreateCommentInput(postId = post.id, text = "Comment"))
+
+        val liked = service.likeComment(viewer, comment.id)
+        service.likeComment(viewer, comment.id)
+        val loaded = service.comments(post.id, 10, viewer.id).first()
+        val unliked = service.unlikeComment(viewer, comment.id)
+
+        assertTrue(liked.liked)
+        assertEquals(1L, liked.likeCount)
+        assertEquals(1L, loaded.likeCount)
+        assertEquals(true, loaded.likedByViewer)
+        assertEquals(false, unliked.liked)
+        assertEquals(0L, unliked.likeCount)
+    }
+
+    @Test
+    fun `posts and comments are enriched with account authors`() {
+        val service = service()
+        val post = service.createPost(user, CreatePostInput(text = "Authored"))
+        service.createComment(viewer, CreateCommentInput(postId = post.id, text = "Hello"))
+        val resolver: (String) -> AccountUser? = { id ->
+            when (id) {
+                user.id -> AccountUser(id = user.id, username = "alice", avatarUrl = "/alice.png")
+                viewer.id -> AccountUser(id = viewer.id, username = "viewer", avatarUrl = "/viewer.png")
+                else -> null
+            }
+        }
+
+        val feed = service.feed(viewer.id, emptySet(), 10, resolver)
+        val comments = service.comments(post.id, 10, viewer.id, resolver)
+
+        assertEquals("alice", feed.first().post.author?.username)
+        assertEquals("viewer", comments.first().author?.username)
     }
 
     @Test

@@ -89,7 +89,7 @@ const NODE_SIZES: Record<ProfileKnownNodeId, ProfileCanvasSize> = {
   followAction: { width: 172, height: 48 },
 };
 
-const POST_NODE_SIZE: ProfileCanvasSize = { width: 224, height: 138 };
+const POST_NODE_SIZE: ProfileCanvasSize = { width: 214, height: 172 };
 const MIN_STAGE_WIDTH_EXTRA = 420;
 const MIN_STAGE_HEIGHT = 560;
 const STAGE_PADDING_X = 180;
@@ -211,8 +211,8 @@ function positionAbsoluteNode(
 function postOffset(index: number): ProfileCanvasPoint {
   const column = Math.floor(index / 4);
   const row = index % 4;
-  const x = 370 + column * 260;
-  const y = [-156, -48, 68, 184][row] + column * 18;
+  const x = 336 + column * 228;
+  const y = [-168, -54, 70, 190][row] + column * 16;
   return { x, y };
 }
 

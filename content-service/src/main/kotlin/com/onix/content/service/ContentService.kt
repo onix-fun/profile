@@ -25,10 +25,12 @@ class ContentService(
             Post(
                 id = UUID.randomUUID().toString(),
                 authorId = author.id,
+                author = author.asAccountUser(),
                 title = input.title?.trim()?.takeIf(String::isNotBlank),
                 text = text,
                 blocks = blocks,
                 tags = normalizedTags,
+                allowComments = input.allowComments,
                 visibility = input.visibility,
                 createdAt = now,
                 updatedAt = now
@@ -61,20 +63,21 @@ class ContentService(
     }
 
     fun createComment(author: SessionUser, input: CreateCommentInput): Comment {
-        require(input.text.isNotBlank()) { "Comment text is required" }
-        repository.findPost(input.postId) ?: throw IllegalArgumentException("Post not found")
-        if (input.parentId != null) {
-            val parent = repository.findComment(input.parentId) ?: throw IllegalArgumentException("Parent comment not found")
-            require(parent.parentId == null) { "Replies cannot have nested replies" }
-        }
+        require(input.text.isNotBlank() || input.blocks.isNotEmpty()) { "Comment text is required" }
+        val post = repository.findPost(input.postId) ?: throw IllegalArgumentException("Post not found")
+        require(post.allowComments) { "Comments are disabled for this post" }
+        val blocks = input.blocks.ifEmpty { listOf(textBlock(input.text.trim())) }
+        val text = input.text.ifBlank { blocks.joinToString(" ") { it.searchText() }.trim() }
         val now = Instant.now(clock)
         val comment = repository.saveComment(
             Comment(
                 id = UUID.randomUUID().toString(),
                 postId = input.postId,
                 authorId = author.id,
-                parentId = input.parentId,
-                text = input.text.trim(),
+                author = author.asAccountUser(),
+                parentId = null,
+                text = text,
+                blocks = blocks,
                 createdAt = now,
                 updatedAt = now
             )
@@ -83,23 +86,37 @@ class ContentService(
         return comment
     }
 
-    fun profileContent(ownerId: String, visibility: AccountVisibility, postLimit: Int, storyLimit: Int): ProfileContentResponse {
+    fun profileContent(
+        ownerId: String,
+        visibility: AccountVisibility,
+        postLimit: Int,
+        storyLimit: Int,
+        authorResolver: (String) -> AccountUser? = { null }
+    ): ProfileContentResponse {
         if (!visibility.canSeePrivateContent) {
             return ProfileContentResponse()
         }
         val now = Instant.now(clock)
         val posts = repository.listPostsByAuthor(ownerId, postLimit.coerceIn(1, 500))
             .map { withViewerState(it, visibility.viewerId) }
+            .map { withAuthor(it, authorResolver) }
         val stories = repository.listActiveStoriesByAuthor(ownerId, now, storyLimit.coerceIn(1, 50))
             .filter { canViewStory(it, visibility, includeArchived = false) }
             .map { enrichStory(it, now = now, viewerId = visibility.viewerId) }
         val comments = posts.flatMap { repository.listCommentsForPost(it.id, 3) }
+            .map { withCommentViewerState(it, visibility.viewerId, authorResolver) }
         return ProfileContentResponse(posts = posts, stories = stories, comments = comments)
     }
 
-    fun feed(viewerId: String, tagAffinity: Set<String>, limit: Int): List<FeedItem> {
+    fun feed(
+        viewerId: String,
+        tagAffinity: Set<String>,
+        limit: Int,
+        authorResolver: (String) -> AccountUser? = { null }
+    ): List<FeedItem> {
         return repository.listRecentPosts(limit.coerceIn(1, 100) * 3)
             .map { withViewerState(it, viewerId) }
+            .map { withAuthor(it, authorResolver) }
             .map { post ->
                 val tagScore = post.tags.count { it in tagAffinity } * 4.0
                 val likeScore = post.likeCount.coerceAtMost(30) * 0.15
@@ -120,8 +137,14 @@ class ContentService(
             .take(limit.coerceIn(1, 100))
     }
 
-    fun post(id: String, viewerId: String? = null): Post? =
-        repository.findPost(id)?.let { withViewerState(it, viewerId) }
+    fun post(
+        id: String,
+        viewerId: String? = null,
+        authorResolver: (String) -> AccountUser? = { null }
+    ): Post? =
+        repository.findPost(id)
+            ?.let { withViewerState(it, viewerId) }
+            ?.let { withAuthor(it, authorResolver) }
 
     fun likePost(user: SessionUser, postId: String): PostReactionState {
         repository.findPost(postId) ?: throw IllegalArgumentException("Post not found")
@@ -147,11 +170,29 @@ class ContentService(
         return StoryReactionState(storyId = storyId, liked = false, likeCount = repository.countStoryLikes(storyId))
     }
 
+    fun likeComment(user: SessionUser, commentId: String): CommentReactionState {
+        repository.findComment(commentId) ?: throw IllegalArgumentException("Comment not found")
+        repository.setCommentLike(commentId, user.id, true)
+        return CommentReactionState(commentId = commentId, liked = true, likeCount = repository.countCommentLikes(commentId))
+    }
+
+    fun unlikeComment(user: SessionUser, commentId: String): CommentReactionState {
+        repository.findComment(commentId) ?: throw IllegalArgumentException("Comment not found")
+        repository.setCommentLike(commentId, user.id, false)
+        return CommentReactionState(commentId = commentId, liked = false, likeCount = repository.countCommentLikes(commentId))
+    }
+
     fun story(id: String, viewerId: String? = null): Story? =
         repository.findStory(id)?.let { enrichStory(it, now = Instant.now(clock), viewerId = viewerId) }
 
-    fun comments(postId: String, limit: Int): List<Comment> =
+    fun comments(
+        postId: String,
+        limit: Int,
+        viewerId: String? = null,
+        authorResolver: (String) -> AccountUser? = { null }
+    ): List<Comment> =
         repository.listCommentsForPost(postId, limit.coerceIn(1, 100))
+            .map { withCommentViewerState(it, viewerId, authorResolver) }
 
     fun storiesFeed(
         viewerId: String,
@@ -293,7 +334,7 @@ class ContentService(
                         .coerceAtMost(STORY_VIDEO_MAX_MS)
                         .coerceAtLeast(1_000)
                 ContentBlockType.IMAGE -> STORY_IMAGE_DURATION_MS
-                ContentBlockType.TEXT -> null
+                ContentBlockType.TEXT, ContentBlockType.FILE -> null
             }
         } ?: STORY_IMAGE_DURATION_MS
 
@@ -317,6 +358,21 @@ class ContentService(
         post.copy(
             likeCount = repository.countPostLikes(post.id),
             likedByViewer = viewerId?.let { repository.isPostLikedBy(post.id, it) } ?: false
+        )
+
+    private fun withAuthor(post: Post, authorResolver: (String) -> AccountUser?): Post =
+        post.copy(author = post.author ?: authorResolver(post.authorId))
+
+    private fun withCommentViewerState(
+        comment: Comment,
+        viewerId: String?,
+        authorResolver: (String) -> AccountUser?
+    ): Comment =
+        comment.copy(
+            author = comment.author ?: authorResolver(comment.authorId),
+            likeCount = repository.countCommentLikes(comment.id),
+            likedByViewer = viewerId?.let { repository.isCommentLikedBy(comment.id, it) } ?: false,
+            blocks = comment.blocks.ifEmpty { if (comment.text.isBlank()) emptyList() else listOf(textBlock(comment.text)) }
         )
 
     companion object {

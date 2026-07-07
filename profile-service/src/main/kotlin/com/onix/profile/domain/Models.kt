@@ -24,6 +24,15 @@ data class AccountSearchUser(
 )
 
 @Serializable
+data class AccountUser(
+    val id: String,
+    val username: String,
+    val firstName: String? = null,
+    val lastName: String? = null,
+    val avatarUrl: String? = null
+)
+
+@Serializable
 data class Relationship(
     val isFollowing: Boolean = false,
     val isFollowedBy: Boolean = false,
@@ -65,6 +74,7 @@ data class AccountProfile(
 data class ProfileContentPost(
     val id: String,
     val authorId: String? = null,
+    val author: AccountUser? = null,
     val title: String? = null,
     val text: String = "",
     val blocks: List<ContentBlock> = emptyList(),

@@ -22,18 +22,19 @@ class JdbcContentRepository(private val ds: DataSource) : ContentRepository {
             try {
                 conn.prepareStatement(
                     """
-                    INSERT INTO content.posts (id, author_id, title, text, visibility, status, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO content.posts (id, author_id, title, text, allow_comments, visibility, status, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """.trimIndent()
                 ).use { ps ->
                     ps.setObject(1, UUID.fromString(post.id))
                     ps.setObject(2, UUID.fromString(post.authorId))
                     ps.setString(3, post.title)
                     ps.setString(4, post.text)
-                    ps.setString(5, post.visibility.name)
-                    ps.setString(6, post.status.name)
-                    ps.setTimestamp(7, Timestamp.from(post.createdAt))
-                    ps.setTimestamp(8, Timestamp.from(post.updatedAt))
+                    ps.setBoolean(5, post.allowComments)
+                    ps.setString(6, post.visibility.name)
+                    ps.setString(7, post.status.name)
+                    ps.setTimestamp(8, Timestamp.from(post.createdAt))
+                    ps.setTimestamp(9, Timestamp.from(post.updatedAt))
                     ps.executeUpdate()
                 }
                 saveBlocks(conn, "post_blocks", "post_id", post.id, post.blocks)
@@ -52,7 +53,7 @@ class JdbcContentRepository(private val ds: DataSource) : ContentRepository {
     override fun findPost(id: String): Post? = ds.connection.use { conn ->
         conn.prepareStatement(
             """
-            SELECT id, author_id, title, text, visibility, status, created_at, updated_at
+            SELECT id, author_id, title, text, allow_comments, visibility, status, created_at, updated_at
             FROM content.posts WHERE id = ? AND status = 'ACTIVE'
             """.trimIndent()
         ).use { ps ->
@@ -64,7 +65,7 @@ class JdbcContentRepository(private val ds: DataSource) : ContentRepository {
     override fun listPostsByAuthor(authorId: String, limit: Int): List<Post> = ds.connection.use { conn ->
         conn.prepareStatement(
             """
-            SELECT id, author_id, title, text, visibility, status, created_at, updated_at
+            SELECT id, author_id, title, text, allow_comments, visibility, status, created_at, updated_at
             FROM content.posts WHERE author_id = ? AND status = 'ACTIVE'
             ORDER BY created_at DESC LIMIT ?
             """.trimIndent()
@@ -78,7 +79,7 @@ class JdbcContentRepository(private val ds: DataSource) : ContentRepository {
     override fun listRecentPosts(limit: Int): List<Post> = ds.connection.use { conn ->
         conn.prepareStatement(
             """
-            SELECT id, author_id, title, text, visibility, status, created_at, updated_at
+            SELECT id, author_id, title, text, allow_comments, visibility, status, created_at, updated_at
             FROM content.posts WHERE status = 'ACTIVE'
             ORDER BY created_at DESC LIMIT ?
             """.trimIndent()
@@ -163,6 +164,46 @@ class JdbcContentRepository(private val ds: DataSource) : ContentRepository {
     override fun isStoryLikedBy(storyId: String, userId: String): Boolean = ds.connection.use { conn ->
         conn.prepareStatement("SELECT 1 FROM content.story_likes WHERE story_id = ? AND user_id = ?").use { ps ->
             ps.setObject(1, UUID.fromString(storyId))
+            ps.setObject(2, UUID.fromString(userId))
+            ps.executeQuery().use { rs -> rs.next() }
+        }
+    }
+
+    override fun setCommentLike(commentId: String, userId: String, liked: Boolean) {
+        ds.connection.use { conn ->
+            if (liked) {
+                conn.prepareStatement(
+                    """
+                    INSERT INTO content.comment_likes (comment_id, user_id, created_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT (comment_id, user_id) DO NOTHING
+                    """.trimIndent()
+                ).use { ps ->
+                    ps.setObject(1, UUID.fromString(commentId))
+                    ps.setObject(2, UUID.fromString(userId))
+                    ps.setTimestamp(3, Timestamp.from(Instant.now()))
+                    ps.executeUpdate()
+                }
+            } else {
+                conn.prepareStatement("DELETE FROM content.comment_likes WHERE comment_id = ? AND user_id = ?").use { ps ->
+                    ps.setObject(1, UUID.fromString(commentId))
+                    ps.setObject(2, UUID.fromString(userId))
+                    ps.executeUpdate()
+                }
+            }
+        }
+    }
+
+    override fun countCommentLikes(commentId: String): Long = ds.connection.use { conn ->
+        conn.prepareStatement("SELECT COUNT(*) FROM content.comment_likes WHERE comment_id = ?").use { ps ->
+            ps.setObject(1, UUID.fromString(commentId))
+            ps.executeQuery().use { rs -> if (rs.next()) rs.getLong(1) else 0 }
+        }
+    }
+
+    override fun isCommentLikedBy(commentId: String, userId: String): Boolean = ds.connection.use { conn ->
+        conn.prepareStatement("SELECT 1 FROM content.comment_likes WHERE comment_id = ? AND user_id = ?").use { ps ->
+            ps.setObject(1, UUID.fromString(commentId))
             ps.setObject(2, UUID.fromString(userId))
             ps.executeQuery().use { rs -> rs.next() }
         }
@@ -316,6 +357,7 @@ class JdbcContentRepository(private val ds: DataSource) : ContentRepository {
                     ps.setTimestamp(8, Timestamp.from(comment.updatedAt))
                     ps.executeUpdate()
                 }
+                saveBlocks(conn, "comment_blocks", "comment_id", comment.id, comment.blocks)
                 conn.commit()
                 return comment
             } catch (error: Throwable) {
@@ -335,7 +377,7 @@ class JdbcContentRepository(private val ds: DataSource) : ContentRepository {
             """.trimIndent()
         ).use { ps ->
             ps.setObject(1, UUID.fromString(id))
-            ps.executeQuery().use { rs -> if (rs.next()) mapComment(rs) else null }
+            ps.executeQuery().use { rs -> if (rs.next()) mapComment(conn, rs) else null }
         }
     }
 
@@ -349,7 +391,7 @@ class JdbcContentRepository(private val ds: DataSource) : ContentRepository {
         ).use { ps ->
             ps.setObject(1, UUID.fromString(postId))
             ps.setInt(2, limit)
-            ps.executeQuery().use { rs -> rs.rows { mapComment(rs) } }
+            ps.executeQuery().use { rs -> rs.rows { mapComment(conn, rs) } }
         }
     }
 
@@ -390,6 +432,7 @@ class JdbcContentRepository(private val ds: DataSource) : ContentRepository {
             text = rs.getString("text"),
             blocks = loadBlocks(conn, "post_blocks", "post_id", id),
             tags = loadTags(conn, id),
+            allowComments = rs.getBoolean("allow_comments"),
             visibility = Visibility.valueOf(rs.getString("visibility")),
             status = ContentStatus.valueOf(rs.getString("status")),
             createdAt = rs.getTimestamp("created_at").toInstant(),
@@ -410,16 +453,20 @@ class JdbcContentRepository(private val ds: DataSource) : ContentRepository {
         )
     }
 
-    private fun mapComment(rs: ResultSet): Comment = Comment(
-        id = rs.getObject("id").toString(),
-        postId = rs.getObject("post_id").toString(),
-        authorId = rs.getObject("author_id").toString(),
-        parentId = rs.getObject("parent_id")?.toString(),
-        text = rs.getString("text"),
-        status = ContentStatus.valueOf(rs.getString("status")),
-        createdAt = rs.getTimestamp("created_at").toInstant(),
-        updatedAt = rs.getTimestamp("updated_at").toInstant()
-    )
+    private fun mapComment(conn: Connection, rs: ResultSet): Comment {
+        val id = rs.getObject("id").toString()
+        return Comment(
+            id = id,
+            postId = rs.getObject("post_id").toString(),
+            authorId = rs.getObject("author_id").toString(),
+            parentId = rs.getObject("parent_id")?.toString(),
+            text = rs.getString("text"),
+            blocks = loadBlocks(conn, "comment_blocks", "comment_id", id),
+            status = ContentStatus.valueOf(rs.getString("status")),
+            createdAt = rs.getTimestamp("created_at").toInstant(),
+            updatedAt = rs.getTimestamp("updated_at").toInstant()
+        )
+    }
 
     private fun loadBlocks(conn: Connection, table: String, fk: String, ownerId: String): List<ContentBlock> =
         conn.prepareStatement(

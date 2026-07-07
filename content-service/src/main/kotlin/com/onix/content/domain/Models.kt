@@ -26,7 +26,7 @@ enum class Visibility { PUBLIC, CLOSE_FRIENDS }
 enum class ContentStatus { ACTIVE, ARCHIVED, DELETED }
 
 @Serializable
-enum class ContentBlockType { TEXT, IMAGE, VIDEO, AUDIO }
+enum class ContentBlockType { TEXT, IMAGE, VIDEO, AUDIO, FILE }
 
 @Serializable
 data class SessionUser(
@@ -79,10 +79,12 @@ data class ContentBlock(
 data class Post(
     val id: String = UUID.randomUUID().toString(),
     val authorId: String,
+    val author: AccountUser? = null,
     val title: String? = null,
     val text: String = "",
     val blocks: List<ContentBlock> = emptyList(),
     val tags: List<String> = emptyList(),
+    val allowComments: Boolean = true,
     val visibility: Visibility = Visibility.PUBLIC,
     val status: ContentStatus = ContentStatus.ACTIVE,
     val likeCount: Long = 0,
@@ -119,9 +121,13 @@ data class Comment(
     val id: String = UUID.randomUUID().toString(),
     val postId: String,
     val authorId: String,
+    val author: AccountUser? = null,
     val parentId: String? = null,
     val text: String,
+    val blocks: List<ContentBlock> = emptyList(),
     val status: ContentStatus = ContentStatus.ACTIVE,
+    val likeCount: Long = 0,
+    val likedByViewer: Boolean = false,
     @Serializable(with = InstantIsoSerializer::class)
     val createdAt: Instant = Instant.now(),
     @Serializable(with = InstantIsoSerializer::class)
@@ -145,6 +151,13 @@ data class PostReactionState(
 @Serializable
 data class StoryReactionState(
     val storyId: String,
+    val liked: Boolean,
+    val likeCount: Long
+)
+
+@Serializable
+data class CommentReactionState(
+    val commentId: String,
     val liked: Boolean,
     val likeCount: Long
 )
@@ -199,6 +212,7 @@ data class CreatePostInput(
     val text: String = "",
     val blocks: List<ContentBlock> = emptyList(),
     val tags: List<String> = emptyList(),
+    val allowComments: Boolean = true,
     val visibility: Visibility = Visibility.PUBLIC
 )
 
@@ -211,8 +225,9 @@ data class CreateStoryInput(
 @Serializable
 data class CreateCommentInput(
     val postId: String,
+    val text: String,
+    val blocks: List<ContentBlock> = emptyList(),
     val parentId: String? = null,
-    val text: String
 )
 
 fun textBlock(text: String): ContentBlock = ContentBlock(
