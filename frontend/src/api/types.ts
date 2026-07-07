@@ -82,7 +82,7 @@ export interface ProfileContentComment {
 }
 
 export interface ProfileCanvasResponse {
-  status: "OK" | "BLOCKED";
+  status: "OK" | "BLOCKED" | "PRIVATE";
   profile?: AccountProfile | null;
   content?: {
     posts: ProfileContentPost[];
@@ -97,6 +97,26 @@ export interface ProfileCanvasResponse {
     canFollow: boolean;
   };
   viewport: CanvasViewport;
+}
+
+export type SocialFilter = "friends" | "subscribers" | "subscriptions";
+
+export interface RelatedUser {
+  id: string;
+  username: string;
+  firstName?: string | null;
+  lastName?: string | null;
+  avatarUrl?: string | null;
+  relationship?: Relationship | null;
+}
+
+export interface SocialCanvasResponse {
+  owner: AccountProfile;
+  filter: SocialFilter;
+  items: RelatedUser[];
+  totalCount: number;
+  page: number;
+  limit: number;
 }
 
 export interface ContentBlock {

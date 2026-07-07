@@ -105,8 +105,45 @@ fun Application.registerRoutes(config: AppConfig) {
                     ?: throw IllegalArgumentException("nickname is required")
                 val currentUser = account.getMe(token)
                 val profile = account.getProfile(nickname, token)
+                val shell = CanvasMapper.toCanvas(profile, currentUser)
+                if (shell.status != "OK") {
+                    call.respond(shell)
+                    return@get
+                }
                 val profileContent = content.profileContent(profile.id, token)
                 call.respond(CanvasMapper.toCanvas(profile, currentUser, profileContent))
+            }
+
+            get("/profiles/{nickname}/social") {
+                val token = call.accessToken() ?: return@get call.respondAuthRequired(config)
+                val nickname = call.parameters["nickname"]?.takeIf(String::isNotBlank)
+                    ?: throw IllegalArgumentException("nickname is required")
+                val filter = call.request.queryParameters["filter"]?.lowercase()?.takeIf {
+                    it == "friends" || it == "subscribers" || it == "subscriptions"
+                } ?: "friends"
+                val page = call.request.queryParameters["page"]?.toIntOrNull()?.coerceAtLeast(1) ?: 1
+                val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 80) ?: 40
+                val currentUser = account.getMe(token)
+                val profile = account.getProfile(nickname, token)
+                val shell = CanvasMapper.toCanvas(profile, currentUser)
+                if (shell.status == "BLOCKED" || shell.status == "PRIVATE") {
+                    call.respond(HttpStatusCode.Forbidden, ErrorResponse(shell.status, "Profile social graph is not available"))
+                    return@get
+                }
+
+                val users = when (filter) {
+                    "subscribers" -> account.followers(profile.id, page, limit, token)
+                    "subscriptions" -> account.following(profile.id, page, limit, token)
+                    else -> ownerFriends(account, profile.id, page, limit, token)
+                }
+                call.respond(SocialCanvasResponse(
+                    owner = profile,
+                    filter = filter,
+                    items = users.items,
+                    totalCount = users.totalCount,
+                    page = page,
+                    limit = limit
+                ))
             }
 
             post("/profiles/{userId}/follow") {
@@ -130,6 +167,41 @@ fun Application.registerRoutes(config: AppConfig) {
             }
         }
     }
+}
+
+private fun ownerFriends(
+    account: AccountClient,
+    ownerId: String,
+    page: Int,
+    limit: Int,
+    token: String
+): UserPageResponse {
+    val maxAccountPageSize = 100
+    val followers = loadAllSocialUsers { currentPage ->
+        account.followers(ownerId, currentPage, maxAccountPageSize, token)
+    }
+    val following = loadAllSocialUsers { currentPage ->
+        account.following(ownerId, currentPage, maxAccountPageSize, token)
+    }
+    val followingIds = following.map { it.id }.toSet()
+    val friends = followers.filter { it.id in followingIds }
+    val from = ((page.coerceAtLeast(1) - 1) * limit).coerceAtMost(friends.size)
+    val to = (from + limit).coerceAtMost(friends.size)
+    return UserPageResponse(items = friends.subList(from, to), totalCount = friends.size)
+}
+
+private fun loadAllSocialUsers(fetch: (Int) -> UserPageResponse): List<RelatedUser> {
+    val result = linkedMapOf<String, RelatedUser>()
+    var page = 1
+    var total = Int.MAX_VALUE
+    while (result.size < total && page <= 10) {
+        val next = fetch(page)
+        total = next.totalCount
+        next.items.forEach { result[it.id] = it }
+        if (next.items.isEmpty()) break
+        page += 1
+    }
+    return result.values.toList()
 }
 
 private suspend fun ApplicationCall.respondAuthRequired(config: AppConfig) {

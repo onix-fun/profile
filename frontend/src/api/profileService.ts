@@ -1,5 +1,5 @@
 import { api } from "@/api/client";
-import type { AccountSearchUser, ProfileCanvasResponse, Relationship, SessionUser } from "@/api/types";
+import type { AccountSearchUser, ProfileCanvasResponse, Relationship, SessionUser, SocialCanvasResponse, SocialFilter } from "@/api/types";
 
 export class ProfileService {
   static async session(): Promise<SessionUser> {
@@ -24,6 +24,13 @@ export class ProfileService {
   static async searchUsers(query: string, limit = 10): Promise<AccountSearchUser[]> {
     const response = await api.get<AccountSearchUser[]>("/profile-search/users", {
       params: { q: query, limit },
+    });
+    return response.data;
+  }
+
+  static async getSocial(nickname: string, filter: SocialFilter = "friends", page = 1, limit = 60): Promise<SocialCanvasResponse> {
+    const response = await api.get<SocialCanvasResponse>(`/profiles/${encodeURIComponent(nickname)}/social`, {
+      params: { filter, page, limit },
     });
     return response.data;
   }

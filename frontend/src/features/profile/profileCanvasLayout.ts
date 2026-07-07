@@ -7,12 +7,8 @@ export type ProfileKnownNodeId =
   | "bio"
   | "socialLinks"
   | "birthday"
-  | "followers"
-  | "following"
-  | "posts"
-  | "stories"
+  | "social"
   | "archive"
-  | "comments"
   | "followAction";
 
 export type ProfilePostNodeId = `post:${string}`;
@@ -64,12 +60,8 @@ export const ORBIT_OFFSETS: Record<ProfileKnownNodeId, ProfileCanvasPoint> = {
   bio: { x: 0, y: 214 },
   socialLinks: { x: -250, y: 190 },
   birthday: { x: -292, y: 116 },
-  followers: { x: -310, y: -56 },
-  following: { x: -310, y: 52 },
-  posts: { x: 360, y: -190 },
-  stories: { x: -292, y: -162 },
+  social: { x: -310, y: -50 },
   archive: { x: -210, y: -234 },
-  comments: { x: -292, y: 162 },
   followAction: { x: 0, y: 142 },
 };
 
@@ -80,20 +72,14 @@ const NODE_SIZES: Record<ProfileKnownNodeId, ProfileCanvasSize> = {
   bio: { width: 280, height: 88 },
   socialLinks: { width: 250, height: 112 },
   birthday: { width: 170, height: 52 },
-  followers: { width: 166, height: 74 },
-  following: { width: 166, height: 74 },
-  posts: { width: 176, height: 74 },
-  stories: { width: 176, height: 74 },
+  social: { width: 214, height: 94 },
   archive: { width: 176, height: 74 },
-  comments: { width: 176, height: 74 },
   followAction: { width: 172, height: 48 },
 };
 
 const POST_NODE_SIZE: ProfileCanvasSize = { width: 214, height: 172 };
 const MIN_STAGE_WIDTH_EXTRA = 420;
-const MIN_STAGE_HEIGHT = 560;
 const STAGE_PADDING_X = 180;
-const STAGE_PADDING_Y = 70;
 const COLLISION_GAP = 18;
 
 export function buildProfileCanvasLayout(
@@ -102,36 +88,33 @@ export function buildProfileCanvasLayout(
   options: ProfileCanvasLayoutOptions = {},
 ): ProfileCanvasLayout {
   const visibleNodes = [
-    ...response.nodes.filter(isKnownNode).filter((node) => node.id !== "posts"),
+    ...response.nodes.filter(isKnownNode),
     ...(options.hasArchive ? [archiveNode(options.archiveCount || 0)] : []),
     ...postNodes(response.content?.posts || []),
   ];
   const visibleIds = new Set<ProfileCanvasNodeId>(visibleNodes.map((node) => node.id));
-  const relativeNodes = resolveCollisions(visibleNodes.map(positionRelativeNode));
+  const verticalScale = Math.min(1, Math.max(0.58, (viewport.height / 2 - 62) / 300));
+  const relativeNodes = resolveCollisions(visibleNodes.map((node) => positionRelativeNode(node, verticalScale)), viewport);
   const rawBounds = boundsFor(relativeNodes);
   const contentWidth = Math.max(Math.abs(rawBounds.minX), Math.abs(rawBounds.maxX)) * 2 + STAGE_PADDING_X * 2;
-  const contentHeight = Math.max(Math.abs(rawBounds.minY), Math.abs(rawBounds.maxY)) * 2 + STAGE_PADDING_Y * 2;
   const stage = {
     width: Math.ceil(Math.max(viewport.width + MIN_STAGE_WIDTH_EXTRA, contentWidth)),
-    height: Math.ceil(Math.max(viewport.height, contentHeight, MIN_STAGE_HEIGHT)),
+    height: Math.ceil(viewport.height),
   };
   const avatarCenter = { x: stage.width / 2, y: stage.height / 2 };
 
   const nodes = relativeNodes.map((node) => positionAbsoluteNode(node, avatarCenter));
   const nodeMap = new Map(nodes.map((node) => [node.id, node]));
   const edges = response.edges
+    .filter((edge) => !edge.target.startsWith("post:"))
     .filter((edge) => visibleIds.has(edge.source as ProfileCanvasNodeId) && visibleIds.has(edge.target as ProfileCanvasNodeId))
     .map((edge) => positionEdge(edge, nodeMap))
-    .filter((edge): edge is PositionedProfileCanvasEdge => Boolean(edge));
-  const postEdges = nodes
-    .filter((node) => isPostNodeId(node.id))
-    .map((node) => syntheticEdge("avatar", node.id, nodeMap))
     .filter((edge): edge is PositionedProfileCanvasEdge => Boolean(edge));
   const archiveEdge = options.hasArchive ? syntheticEdge("avatar", "archive", nodeMap) : null;
 
   return {
     nodes,
-    edges: [...edges, ...postEdges, ...(archiveEdge ? [archiveEdge] : [])],
+    edges: [...edges, ...(archiveEdge ? [archiveEdge] : [])],
     stage,
     avatarCenter,
     initialScrollLeft: clamp(avatarCenter.x - viewport.width / 2, 0, Math.max(0, stage.width - viewport.width)),
@@ -174,12 +157,13 @@ function archiveNode(count: number): CanvasNode & { id: "archive" } {
 
 function positionRelativeNode(
   node: (CanvasNode & { id: ProfileKnownNodeId }) | (CanvasNode & { id: ProfilePostNodeId }),
+  verticalScale: number,
 ): PositionedProfileCanvasNode {
   const size = isPostNodeId(node.id) ? POST_NODE_SIZE : NODE_SIZES[node.id];
   const offset = isPostNodeId(node.id) ? postOffset(Number(node.data.index || 0)) : ORBIT_OFFSETS[node.id];
   const center = {
     x: offset.x,
-    y: offset.y,
+    y: offset.y * verticalScale,
   };
 
   return {
@@ -250,16 +234,18 @@ function syntheticEdge(
   };
 }
 
-function resolveCollisions(nodes: PositionedProfileCanvasNode[]): PositionedProfileCanvasNode[] {
+function resolveCollisions(nodes: PositionedProfileCanvasNode[], viewport: ProfileCanvasSize): PositionedProfileCanvasNode[] {
   const placed: PositionedProfileCanvasNode[] = [];
+  const maxY = Math.max(110, viewport.height / 2 - 68);
   for (const node of nodes) {
-    let next = node;
+    let next = clampNodeY(node, maxY);
     let attempt = 0;
     while (placed.some((item) => overlaps(item, next)) && attempt < 80) {
       attempt += 1;
       const radius = Math.ceil(attempt / 8) * COLLISION_GAP;
       const angle = attempt * 0.72;
       next = moveNode(node, Math.cos(angle) * radius, Math.sin(angle) * radius);
+      next = clampNodeY(next, maxY);
     }
     placed.push(next);
   }
@@ -274,6 +260,11 @@ function moveNode(node: PositionedProfileCanvasNode, dx: number, dy: number): Po
     y: center.y - node.height / 2,
     center,
   };
+}
+
+function clampNodeY(node: PositionedProfileCanvasNode, maxY: number): PositionedProfileCanvasNode {
+  const nextY = clamp(node.center.y, -maxY, maxY);
+  return moveNode(node, 0, nextY - node.center.y);
 }
 
 function overlaps(a: PositionedProfileCanvasNode, b: PositionedProfileCanvasNode): boolean {

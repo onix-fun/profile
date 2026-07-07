@@ -24,6 +24,32 @@ data class AccountSearchUser(
 )
 
 @Serializable
+data class RelatedUser(
+    val id: String,
+    val username: String,
+    val firstName: String? = null,
+    val lastName: String? = null,
+    val avatarUrl: String? = null,
+    val relationship: Relationship? = null
+)
+
+@Serializable
+data class UserPageResponse(
+    val items: List<RelatedUser> = emptyList(),
+    val totalCount: Int = 0
+)
+
+@Serializable
+data class SocialCanvasResponse(
+    val owner: AccountProfile,
+    val filter: String,
+    val items: List<RelatedUser> = emptyList(),
+    val totalCount: Int = 0,
+    val page: Int = 1,
+    val limit: Int = 40
+)
+
+@Serializable
 data class AccountUser(
     val id: String,
     val username: String,

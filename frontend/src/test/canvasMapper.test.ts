@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { accountSettingsUrl } from "@/features/profile/accountLinks";
 import { buildProfileCanvasLayout, ORBIT_OFFSETS } from "@/features/profile/profileCanvasLayout";
-import type { ProfileCanvasResponse } from "@/api/types";
+import { buildSocialCanvasLayout, socialNodesOverlap } from "@/features/profile/socialCanvasLayout";
+import type { AccountProfile, ProfileCanvasResponse, RelatedUser } from "@/api/types";
 
 function response(nodes: ProfileCanvasResponse["nodes"], owner = false): ProfileCanvasResponse {
   return {
@@ -36,20 +37,20 @@ describe("profile canvas layout", () => {
   it("uses deterministic orbit positions for automatic layout", () => {
     expect(ORBIT_OFFSETS.avatar).toEqual({ x: 0, y: 0 });
     expect(ORBIT_OFFSETS.followAction).toEqual({ x: 0, y: 142 });
-    expect(ORBIT_OFFSETS.posts).toEqual({ x: 360, y: -190 });
+    expect(ORBIT_OFFSETS.social).toEqual({ x: -310, y: -50 });
   });
 
   it("computes a horizontal stage and centers the avatar initially", () => {
     const layout = buildProfileCanvasLayout(response([
       { id: "avatar", type: "avatar", position: { x: 0, y: 0 }, data: {} },
-      { id: "followers", type: "stat", position: { x: 0, y: 0 }, data: {} },
+      { id: "social", type: "social", position: { x: 0, y: 0 }, data: {} },
       { id: "bio", type: "text", position: { x: 0, y: 0 }, data: {} },
     ]), { width: 640, height: 520 });
     const avatar = layout.nodes.find((node) => node.id === "avatar");
     const bio = layout.nodes.find((node) => node.id === "bio");
 
     expect(layout.stage.width).toBeGreaterThan(640);
-    expect(layout.stage.height).toBeGreaterThanOrEqual(560);
+    expect(layout.stage.height).toBe(520);
     expect(layout.initialScrollLeft).toBeGreaterThan(0);
     expect(layout.initialScrollLeft).toBeLessThanOrEqual(layout.stage.width - 640);
     expect(avatar?.center.x).toBe(layout.avatarCenter.x);
@@ -66,11 +67,11 @@ describe("profile canvas layout", () => {
     expect(layout.edges.map((edge) => edge.id)).not.toContain("avatar-settingsAction");
   });
 
-  it("places profile posts as right-side canvas branches without overlap", () => {
+  it("places profile posts on the right without graph edges", () => {
     const layout = buildProfileCanvasLayout({
       ...response([
         { id: "avatar", type: "avatar", position: { x: 0, y: 0 }, data: {} },
-        { id: "posts", type: "stat", position: { x: 0, y: 0 }, data: { label: "2" } },
+        { id: "social", type: "social", position: { x: 0, y: 0 }, data: { label: "Social" } },
       ]),
       content: {
         posts: [
@@ -88,7 +89,7 @@ describe("profile canvas layout", () => {
     expect(layout.nodes.map((node) => node.id)).not.toContain("posts");
     expect(postNodes).toHaveLength(2);
     expect(postNodes.every((node) => avatar && node.center.x > avatar.center.x)).toBe(true);
-    expect(layout.edges.filter((edge) => edge.target.startsWith("post:"))).toHaveLength(2);
+    expect(layout.edges.filter((edge) => edge.target.startsWith("post:"))).toHaveLength(0);
   });
 
   it("adds archive as an upper-left avatar branch when archived stories exist", () => {
@@ -104,6 +105,45 @@ describe("profile canvas layout", () => {
     expect(archive?.data.label).toBe("3");
     expect(avatar && archive && archive.center.x < avatar.center.x && archive.center.y < avatar.center.y).toBe(true);
     expect(layout.edges.map((edge) => edge.id)).toContain("avatar-archive");
+  });
+});
+
+describe("social canvas layout", () => {
+  it("packs user nodes without overlap around the owner anchor", () => {
+    const owner: AccountProfile = {
+      id: "owner",
+      username: "alice",
+      firstName: "Alice",
+      socialLinks: [],
+      followersCount: 0,
+      followingCount: 0,
+      isPrivate: false,
+      relationship: {
+        isFollowing: false,
+        isFollowedBy: false,
+        isFriend: false,
+        isBlocked: false,
+        hasPendingRequest: false,
+      },
+    };
+    const users: RelatedUser[] = Array.from({ length: 44 }, (_, index) => ({
+      id: `user-${index}`,
+      username: `user${index}`,
+      firstName: `User ${index}`,
+    }));
+
+    const layout = buildSocialCanvasLayout(owner, users, { width: 900, height: 560 });
+
+    expect(layout.userNodes).toHaveLength(44);
+    expect(layout.stage.width).toBeGreaterThan(900);
+    for (let index = 0; index < layout.userNodes.length; index += 1) {
+      const node = layout.userNodes[index];
+      expect(node.y).toBeGreaterThanOrEqual(0);
+      expect(node.y + node.height).toBeLessThanOrEqual(layout.stage.height);
+      for (let nextIndex = index + 1; nextIndex < layout.userNodes.length; nextIndex += 1) {
+        expect(socialNodesOverlap(node, layout.userNodes[nextIndex])).toBe(false);
+      }
+    }
   });
 });
 

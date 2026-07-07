@@ -58,9 +58,25 @@ class CanvasMapperTest {
         )
 
         val ids = response.nodes.map { it.id }
-        assertTrue("posts" in ids)
-        assertTrue("stories" in ids)
-        assertTrue("comments" in ids)
+        assertTrue("social" in ids)
+        assertFalse("followers" in ids)
+        assertFalse("following" in ids)
+        assertFalse("posts" in ids)
+        assertFalse("stories" in ids)
+        assertFalse("comments" in ids)
+    }
+
+    @Test
+    fun `private inaccessible profile returns lock state without canvas nodes`() {
+        val response = CanvasMapper.toCanvas(
+            profile = profile(isPrivate = true, relationship = Relationship()),
+            currentUser = viewer(),
+        )
+
+        assertEquals("PRIVATE", response.status)
+        assertTrue(response.nodes.isEmpty())
+        assertTrue(response.content.posts.isEmpty())
+        assertTrue(response.permissions.canFollow)
     }
 
     private fun viewer(
@@ -73,7 +89,9 @@ class CanvasMapperTest {
         username: String = "alice",
         bio: String? = "Builder",
         socialLinks: List<SocialLink> = listOf(SocialLink("Site", "https://example.com")),
-        birthday: BirthdayParts? = BirthdayParts(day = 4, month = 7)
+        birthday: BirthdayParts? = BirthdayParts(day = 4, month = 7),
+        isPrivate: Boolean = false,
+        relationship: Relationship = Relationship()
     ) = AccountProfile(
         id = id,
         username = username,
@@ -84,6 +102,7 @@ class CanvasMapperTest {
         socialLinks = socialLinks,
         followersCount = 10,
         followingCount = 5,
-        relationship = Relationship()
+        isPrivate = isPrivate,
+        relationship = relationship
     )
 }

@@ -54,6 +54,11 @@ export const router = createRouter({
       component: () => import("@/features/stories/StoryArchivePage.vue"),
     },
     {
+      path: "/u/:nickname/social",
+      name: "SocialCanvas",
+      component: () => import("@/features/profile/SocialCanvasPage.vue"),
+    },
+    {
       path: "/u/:nickname",
       name: "Profile",
       component: () => import("@/features/profile/ProfilePage.vue"),

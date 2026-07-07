@@ -12,8 +12,7 @@ object CanvasMapper {
         "bio" to CanvasPosition(165.0, 70.0),
         "socialLinks" to CanvasPosition(55.0, 165.0),
         "birthday" to CanvasPosition(-95.0, 165.0),
-        "followers" to CanvasPosition(-165.0, 55.0),
-        "following" to CanvasPosition(-155.0, -75.0),
+        "social" to CanvasPosition(-235.0, -16.0),
         "posts" to CanvasPosition(320.0, -170.0),
         "stories" to CanvasPosition(370.0, 0.0),
         "comments" to CanvasPosition(320.0, 170.0),
@@ -30,6 +29,18 @@ object CanvasMapper {
         }
 
         val owner = profile.id == currentUser.id
+        if (profile.isPrivate && !owner && !profile.relationship.isFollowing && !profile.relationship.isFriend) {
+            return ProfileCanvasResponse(
+                status = "PRIVATE",
+                profile = profile,
+                relationship = profile.relationship,
+                permissions = ProfilePermissions(
+                    owner = false,
+                    canFollow = !profile.relationship.isBlocked
+                )
+            )
+        }
+
         val nodeIds = buildList {
             add("avatar")
             add("displayName")
@@ -37,11 +48,7 @@ object CanvasMapper {
             if (!profile.bio.isNullOrBlank()) add("bio")
             if (profile.socialLinks.isNotEmpty()) add("socialLinks")
             if (profile.birthday != null) add("birthday")
-            add("followers")
-            add("following")
-            if (content.posts.isNotEmpty()) add("posts")
-            if (content.stories.isNotEmpty()) add("stories")
-            if (content.comments.isNotEmpty()) add("comments")
+            add("social")
             if (!owner) add("followAction")
         }
 
@@ -77,7 +84,7 @@ object CanvasMapper {
         "followAction" -> "action"
         "bio" -> "text"
         "socialLinks" -> "links"
-        "followers", "following", "posts", "stories", "comments" -> "stat"
+        "social" -> "social"
         else -> "label"
     }
 
@@ -95,15 +102,13 @@ object CanvasMapper {
             "bio" -> JsonObject(mapOf("label" to JsonPrimitive(profile.bio.orEmpty())))
             "socialLinks" -> JsonObject(mapOf("count" to JsonPrimitive(profile.socialLinks.size)))
             "birthday" -> JsonObject(mapOf("label" to JsonPrimitive("${profile.birthday?.day}.${profile.birthday?.month}")))
-            "followers" -> JsonObject(mapOf("label" to JsonPrimitive(profile.followersCount), "caption" to JsonPrimitive("Followers")))
-            "following" -> JsonObject(mapOf("label" to JsonPrimitive(profile.followingCount), "caption" to JsonPrimitive("Following")))
-            "posts" -> JsonObject(mapOf(
-                "label" to JsonPrimitive(content.posts.size),
-                "caption" to JsonPrimitive("Posts"),
-                "preview" to JsonPrimitive(content.posts.firstOrNull()?.title ?: content.posts.firstOrNull()?.text.orEmpty())
+            "social" -> JsonObject(mapOf(
+                "label" to JsonPrimitive("Social"),
+                "subscribersLabel" to JsonPrimitive("Subscribers"),
+                "subscriptionsLabel" to JsonPrimitive("Subscriptions"),
+                "subscribers" to JsonPrimitive(profile.followersCount),
+                "subscriptions" to JsonPrimitive(profile.followingCount)
             ))
-            "stories" -> JsonObject(mapOf("label" to JsonPrimitive(content.stories.size), "caption" to JsonPrimitive("Stories")))
-            "comments" -> JsonObject(mapOf("label" to JsonPrimitive(content.comments.size), "caption" to JsonPrimitive("Comments")))
             "followAction" -> JsonObject(mapOf("label" to JsonPrimitive(followLabel(profile.relationship))))
             else -> JsonObject(emptyMap())
         }

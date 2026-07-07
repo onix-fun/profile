@@ -15,12 +15,23 @@ const initials = computed(() => {
   const source = user.value?.firstName || user.value?.username || "U";
   return source.slice(0, 1).toUpperCase();
 });
-const chromeHidden = computed(() => route.name === "CreatePost" || route.name === "CreateStory");
+const chromeHidden = computed(() => (
+  route.name === "CreatePost"
+  || route.name === "CreateStory"
+  || route.name === "Profile"
+  || route.name === "SocialCanvas"
+  || route.name === "StoryArchive"
+  || route.name === "StoryViewer"
+));
 const headerVisible = computed(() => !chromeHidden.value && route.path !== "/");
 const settingsHref = computed(() => accountSettingsUrl(runtimeConfig.accountFrontendUrl, window.location.href));
 
 onMounted(async () => {
-  user.value = await ProfileService.session();
+  try {
+    user.value = await ProfileService.session();
+  } catch {
+    user.value = null;
+  }
 });
 
 function closeMenu() {

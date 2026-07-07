@@ -32,8 +32,14 @@ let drawFrame = 0;
 
 const nickname = computed(() => String(route.params.nickname || ""));
 const isBlocked = computed(() => response.value?.status === "BLOCKED");
+const isPrivateLocked = computed(() => response.value?.status === "PRIVATE");
 const canFollow = computed(() => Boolean(response.value?.permissions.canFollow));
 const relationship = computed(() => profile.value?.relationship || response.value?.relationship || null);
+const displayName = computed(() => {
+  const current = profile.value;
+  if (!current) return "Profile";
+  return [current.firstName, current.lastName].filter(Boolean).join(" ") || current.username;
+});
 const followLabel = computed(() => {
   const rel = relationship.value;
   if (!rel) return "Follow";
@@ -122,7 +128,7 @@ async function loadProfile() {
 
 async function loadArchiveStatus() {
   archiveCount.value = 0;
-  if (!response.value?.profile?.id) return;
+  if (!response.value?.profile?.id || response.value.status !== "OK") return;
   const archive = await ContentService.storyArchive(response.value.profile.id, null, 12);
   archiveCount.value = archive.stories.length;
 }
@@ -184,6 +190,10 @@ function openPost(post: ProfileContentPost) {
 
 function openArchive() {
   void router.push(`/u/${encodeURIComponent(nickname.value)}/stories/archive`);
+}
+
+function openSocial() {
+  void router.push(`/u/${encodeURIComponent(nickname.value)}/social?filter=friends`);
 }
 
 async function togglePostLike(post: ProfileContentPost) {
@@ -301,6 +311,28 @@ function drawCanvas() {
       <p>This relationship blocks profile viewing.</p>
     </section>
 
+    <section v-else-if="isPrivateLocked && profile" class="private-screen">
+      <div class="private-card">
+        <span class="private-avatar">
+          <img v-if="profile.avatarUrl" :src="profile.avatarUrl" alt="" />
+          <span v-else>{{ displayName.slice(0, 2).toUpperCase() }}</span>
+        </span>
+        <i class="pi pi-lock private-lock" aria-hidden="true"></i>
+        <h1>{{ displayName }}</h1>
+        <p>@{{ profile.username }}</p>
+        <strong>Private profile</strong>
+        <button
+          type="button"
+          class="private-follow"
+          :disabled="!canFollow || relationship?.hasPendingRequest"
+          @click="toggleFollow"
+        >
+          <i :class="followIcon"></i>
+          <span>{{ relationship?.hasPendingRequest ? "Requested" : "Request access" }}</span>
+        </button>
+      </div>
+    </section>
+
     <section v-else-if="profile" class="canvas-shell">
       <div ref="canvasViewport" class="canvas-viewport" aria-label="Profile canvas">
         <div class="canvas-stage" :style="canvasStageStyle">
@@ -342,6 +374,19 @@ function drawCanvas() {
                 <strong>{{ nodeLabel(node) }}</strong>
                 <span>{{ nodeCaption(node) }}</span>
               </div>
+
+              <button
+                v-else-if="node.id === 'social'"
+                class="canvas-node node node-social"
+                type="button"
+                :style="nodeStyle(node)"
+                @click="openSocial"
+              >
+                <i class="pi pi-users"></i>
+                <strong>{{ nodeLabel(node) || "Social" }}</strong>
+                <span>{{ String(node.data.subscribersLabel || "Subscribers") }}</span>
+                <span>{{ String(node.data.subscriptionsLabel || "Subscriptions") }}</span>
+              </button>
 
               <div
                 v-else-if="node.id === 'socialLinks'"
@@ -486,6 +531,7 @@ function drawCanvas() {
 .node-label,
 .node-text,
 .node-stat,
+.node-social,
 .node-archive,
 .node-links,
 .node-action {
@@ -532,6 +578,42 @@ function drawCanvas() {
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
+}
+
+.node-social {
+  border: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 3px 10px;
+  padding: 13px 14px;
+  background: var(--surface-raised);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.node-social i {
+  grid-row: 1 / span 3;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: var(--surface-muted);
+  color: var(--muted);
+}
+
+.node-social strong {
+  font-size: 17px;
+  line-height: 1;
+  font-weight: 900;
+}
+
+.node-social span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
 }
 
 .node-archive {
@@ -647,6 +729,96 @@ function drawCanvas() {
 .state-screen span {
   margin: 0;
   font-weight: 700;
+}
+
+.private-screen {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background: var(--bg);
+}
+
+.private-card {
+  width: min(100%, 340px);
+  display: grid;
+  justify-items: center;
+  gap: 9px;
+  padding: 28px;
+  border: 1px solid var(--surface-active);
+  border-radius: 18px;
+  background: var(--surface-raised);
+  color: var(--text);
+  text-align: center;
+  box-shadow: 0 18px 46px rgba(22, 34, 51, 0.12);
+}
+
+.private-avatar {
+  width: 108px;
+  height: 108px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: var(--surface-muted);
+  border: 4px solid var(--surface);
+  font-size: 30px;
+  font-weight: 900;
+}
+
+.private-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.private-lock {
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: var(--surface-muted);
+  color: var(--muted);
+}
+
+.private-card h1 {
+  margin: 4px 0 0;
+  font-size: 24px;
+  line-height: 1.15;
+}
+
+.private-card p {
+  margin: 0;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.private-card strong {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.private-follow {
+  margin-top: 8px;
+  min-height: 42px;
+  border: 0;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 18px;
+  background: var(--btn-primary-bg);
+  color: var(--btn-primary-text);
+  font: inherit;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.private-follow:disabled {
+  cursor: default;
+  opacity: 0.72;
 }
 
 .loader {

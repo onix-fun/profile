@@ -3,6 +3,7 @@ package com.onix.profile.account
 import com.onix.profile.domain.AccountProfile
 import com.onix.profile.domain.AccountSearchUser
 import com.onix.profile.domain.Relationship
+import com.onix.profile.domain.UserPageResponse
 import com.onix.profile.domain.SessionUser
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -61,6 +62,24 @@ class AccountClient(private val apiBaseUrl: String) {
         if (response.statusCode() == 401) throw AccountUnauthorized()
         if (response.statusCode() == 403) throw AccountForbidden()
         if (response.statusCode() !in 200..299) throw AccountUnavailable("Account profile search returned ${response.statusCode()}")
+        return json.decodeFromString(response.body())
+    }
+
+    fun followers(userId: String, page: Int, limit: Int, accessToken: String): UserPageResponse {
+        val response = request("GET", "/profile/$userId/followers?page=${page.coerceAtLeast(1)}&limit=${limit.coerceIn(1, 100)}", accessToken)
+        return decodeUserPage(response, "followers")
+    }
+
+    fun following(userId: String, page: Int, limit: Int, accessToken: String): UserPageResponse {
+        val response = request("GET", "/profile/$userId/following?page=${page.coerceAtLeast(1)}&limit=${limit.coerceIn(1, 100)}", accessToken)
+        return decodeUserPage(response, "following")
+    }
+
+    private fun decodeUserPage(response: HttpResponse<String>, label: String): UserPageResponse {
+        if (response.statusCode() == 401) throw AccountUnauthorized()
+        if (response.statusCode() == 403) throw AccountForbidden()
+        if (response.statusCode() == 404) throw AccountNotFound()
+        if (response.statusCode() !in 200..299) throw AccountUnavailable("Account $label returned ${response.statusCode()}")
         return json.decodeFromString(response.body())
     }
 
