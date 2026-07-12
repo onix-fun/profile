@@ -1,6 +1,7 @@
 package com.onix.content.service
 
 import com.onix.content.domain.*
+import com.onix.content.search.SearchIndexClient
 import com.onix.content.search.SearchEventPublisher
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -15,6 +16,7 @@ import kotlin.math.max
 class ContentService(
     private val repository: ContentRepository,
     private val searchEvents: SearchEventPublisher = SearchEventPublisher.noop(),
+    private val searchIndex: SearchIndexClient = SearchIndexClient.noop(),
     private val clock: Clock = Clock.systemUTC()
 ) {
     private data class ScoredRecommendation(
@@ -139,7 +141,7 @@ class ContentService(
     fun createCollection(actor: CurrentActor, input: CreateCollectionInput): SavedCollection {
         val title = normalizeCollectionTitle(input.title)
         val now = Instant.now(clock)
-        return repository.saveCollection(
+        val collection = repository.saveCollection(
             SavedCollection(
                 id = UUID.randomUUID().toString(),
                 ownerType = actor.activeOwner.ownerType,
@@ -152,6 +154,8 @@ class ContentService(
                 updatedAt = now
             )
         )
+        searchEvents.collectionUpsert(collection)
+        return collection
     }
 
     fun updateCollection(actor: CurrentActor, input: UpdateCollectionInput): SavedCollection {
@@ -164,13 +168,16 @@ class ContentService(
             visibility = input.visibility ?: current.visibility,
             updatedAt = Instant.now(clock)
         )
-        return repository.updateCollection(next)
+        val saved = repository.updateCollection(next)
+        searchEvents.collectionUpsert(saved)
+        return saved
     }
 
     fun deleteCollection(actor: CurrentActor, collectionId: String) {
         val current = repository.findCollection(collectionId) ?: throw IllegalArgumentException("Collection not found")
         requireOwnsCollection(actor.activeOwner.ref(), current)
         repository.deleteCollection(collectionId)
+        searchEvents.collectionDelete(collectionId)
     }
 
     fun collections(
@@ -232,6 +239,9 @@ class ContentService(
         val now = Instant.now(clock)
         (desiredSet - current).forEach { repository.addPostToCollection(it, input.postId, now) }
         (current - desiredSet).forEach { repository.removePostFromCollection(it, input.postId) }
+        (desiredSet + current).forEach { id ->
+            repository.findCollection(id)?.let(searchEvents::collectionUpsert)
+        }
         return PostCollectionsState(postId = input.postId, collectionIds = repository.listPostCollectionIds(owner, input.postId))
     }
 
@@ -250,7 +260,129 @@ class ContentService(
         val collection = repository.findCollection(collectionId) ?: throw IllegalArgumentException("Collection not found")
         requireOwnsCollection(actor.activeOwner.ref(), collection)
         repository.removePostFromCollection(collectionId, postId)
+        repository.findCollection(collectionId)?.let(searchEvents::collectionUpsert)
         return PostCollectionsState(postId = postId, collectionIds = repository.listPostCollectionIds(actor.activeOwner.ref(), postId))
+    }
+
+    fun search(
+        viewer: OwnerRef,
+        input: ContentSearchInput,
+        visibilityResolver: (String) -> AccountVisibility,
+        authorResolver: (String) -> AccountUser? = { null }
+    ): ContentSearchResponse {
+        val query = input.query.trim()
+        if (query.isBlank() && input.tags.isEmpty()) return ContentSearchResponse()
+        val requested = normalizeSearchTypes(input.types)
+        val limit = input.limit.coerceIn(1, 100)
+        val errors = mutableListOf<String>()
+        val items = mutableListOf<ContentSearchItem>()
+        val postItems = mutableListOf<ContentSearchItem>()
+
+        if ("posts" in requested || "tags" in requested) {
+            val result = searchIndex.search("posts", query.ifBlank { input.tags.joinToString(" ") }, limit * 3)
+            result.error?.let(errors::add)
+            result.hits.mapNotNull { hit ->
+                repository.findPost(hit.id)
+                    ?.takeIf { post -> matchesSearchFilters(post, input) }
+                    ?.takeIf { post -> canViewPost(post, visibilityResolver(post.ownerRef().key())) }
+                    ?.let { post ->
+                        val enriched = withAuthor(withViewerState(post, viewer), authorResolver)
+                        postSearchItem(enriched, hit.score, hit.snippet)
+                    }
+            }.also { postItems.addAll(it) }
+            if ("posts" in requested) items.addAll(postItems)
+        }
+
+        if ("collections" in requested) {
+            val result = searchIndex.search("collections", query, limit * 3)
+            result.error?.let(errors::add)
+            items.addAll(result.hits.mapNotNull { hit ->
+                repository.findCollection(hit.id)
+                    ?.takeIf { collection -> matchesSearchFilters(collection, input) }
+                    ?.let { collection ->
+                        val visibility = visibilityResolver(collection.ownerRef().key())
+                        collection.takeIf { canViewCollection(it, visibility) }
+                    }
+                    ?.let { collection ->
+                        collectionSearchItem(
+                            collection = enrichCollectionForViewer(collection, visibilityResolver),
+                            owner = authorResolver(collection.ownerRef().key()),
+                            score = hit.score,
+                            snippet = hit.snippet
+                        )
+                    }
+            })
+        }
+
+        if ("comments" in requested) {
+            val result = searchIndex.search("comments", query, limit * 3)
+            result.error?.let(errors::add)
+            items.addAll(result.hits.mapNotNull { hit ->
+                repository.findComment(hit.id)
+                    ?.takeIf { comment -> matchesSearchFilters(comment, input) }
+                    ?.let { comment ->
+                        val post = repository.findPost(comment.postId) ?: return@mapNotNull null
+                        if (!canViewPost(post, visibilityResolver(post.ownerRef().key()))) return@mapNotNull null
+                        commentSearchItem(
+                            comment = withCommentViewerState(comment, viewer, authorResolver),
+                            post = withAuthor(post, authorResolver),
+                            score = hit.score,
+                            snippet = hit.snippet
+                        )
+                    }
+            })
+        }
+
+        if ("tags" in requested) {
+            val existing = items.asSequence().flatMap { it.tags.asSequence() }.toSet()
+            val tags = (postItems.asSequence().flatMap { it.tags.asSequence() } + input.tags.asSequence())
+                .filter(String::isNotBlank)
+                .distinct()
+                .filter { it !in existing || requested == setOf("tags") }
+                .take(limit)
+                .map { tag ->
+                    ContentSearchItem(
+                        type = "TAG",
+                        id = tag,
+                        title = "#$tag",
+                        snippet = "Posts tagged #$tag",
+                        url = "/search?tag=$tag",
+                        score = 0.5,
+                        tags = listOf(tag),
+                        meta = mapOf("tag" to tag)
+                    )
+                }
+            items.addAll(tags)
+        }
+
+        val sorted = sortSearchItems(items.distinctBy { "${it.type}:${it.id}" }, input.sort)
+            .take(limit)
+        return ContentSearchResponse(items = sorted, partialErrors = errors.distinct())
+    }
+
+    fun suggest(
+        viewer: OwnerRef,
+        query: String,
+        limit: Int,
+        visibilityResolver: (String) -> AccountVisibility
+    ): ContentSuggestResponse {
+        val normalized = query.trim()
+        if (normalized.isBlank()) return ContentSuggestResponse()
+        val response = search(
+            viewer = viewer,
+            input = ContentSearchInput(query = normalized, types = listOf("posts", "collections", "comments", "tags"), limit = limit.coerceIn(1, 20)),
+            visibilityResolver = visibilityResolver
+        )
+        val suggestions = response.items
+            .flatMap { item ->
+                buildList {
+                    item.title?.takeIf(String::isNotBlank)?.let { add(ContentSuggestion(item.type, it, it)) }
+                    item.tags.forEach { tag -> add(ContentSuggestion("TAG", tag, "#$tag")) }
+                }
+            }
+            .distinctBy { "${it.type}:${it.value.lowercase()}" }
+            .take(limit.coerceIn(1, 20))
+        return ContentSuggestResponse(suggestions = suggestions, partialErrors = response.partialErrors)
     }
 
     fun feed(
@@ -794,6 +926,105 @@ private fun AccountOwner.ref(): OwnerRef = OwnerRef(ownerType = ownerType, owner
             likedByViewer = viewer?.let { repository.isCommentLikedBy(comment.id, it) } ?: false,
             blocks = comment.blocks.ifEmpty { if (comment.text.isBlank()) emptyList() else listOf(textBlock(comment.text)) }
         )
+
+    private fun normalizeSearchTypes(types: List<String>): Set<String> {
+        val allowed = setOf("posts", "collections", "comments", "tags")
+        val normalized = types.map { it.trim().lowercase() }.filter { it in allowed }.toSet()
+        return normalized.ifEmpty { allowed }
+    }
+
+    private fun matchesSearchFilters(post: Post, input: ContentSearchInput): Boolean {
+        val tags = input.tags.map { it.trim().removePrefix("#").lowercase() }.filter(String::isNotBlank).toSet()
+        if (tags.isNotEmpty() && post.tags.none { it.lowercase() in tags }) return false
+        val author = input.author?.trim()?.removePrefix("@")?.lowercase()?.takeIf(String::isNotBlank)
+        if (author != null) {
+            val authorText = listOf(post.author?.username, post.author?.displayName, post.ownerId, post.authorId)
+                .filterNotNull()
+                .joinToString(" ")
+                .lowercase()
+            if (!authorText.contains(author)) return false
+        }
+        return isWithinSearchDate(post.createdAt, input)
+    }
+
+    private fun matchesSearchFilters(comment: Comment, input: ContentSearchInput): Boolean =
+        isWithinSearchDate(comment.createdAt, input)
+
+    private fun matchesSearchFilters(collection: SavedCollection, input: ContentSearchInput): Boolean =
+        isWithinSearchDate(collection.updatedAt, input)
+
+    private fun isWithinSearchDate(value: Instant, input: ContentSearchInput): Boolean {
+        val from = input.dateFrom?.takeIf(String::isNotBlank)?.let { runCatching { Instant.parse(it) }.getOrNull() }
+        val to = input.dateTo?.takeIf(String::isNotBlank)?.let { runCatching { Instant.parse(it) }.getOrNull() }
+        if (from != null && value.isBefore(from)) return false
+        if (to != null && value.isAfter(to)) return false
+        return true
+    }
+
+    private fun postSearchItem(post: Post, score: Double, snippet: String?): ContentSearchItem =
+        ContentSearchItem(
+            type = "POST",
+            id = post.id,
+            title = post.title ?: post.text.lineSequence().firstOrNull()?.take(80),
+            snippet = snippet ?: post.text.take(180),
+            owner = post.author,
+            url = "/p/${post.id}",
+            score = score,
+            createdAt = post.createdAt.toString(),
+            postId = post.id,
+            tags = post.tags,
+            meta = mapOf(
+                "likeCount" to post.likeCount.toString(),
+                "visibility" to post.visibility.name
+            )
+        )
+
+    private fun collectionSearchItem(
+        collection: SavedCollection,
+        owner: AccountUser?,
+        score: Double,
+        snippet: String?
+    ): ContentSearchItem =
+        ContentSearchItem(
+            type = "COLLECTION",
+            id = collection.id,
+            title = collection.title,
+            snippet = snippet ?: collection.description,
+            owner = owner,
+            url = owner?.let { "/${if (it.ownerType == OwnerType.ORGANIZATION) "o" else "u"}/${it.username}/collections/${collection.id}" }
+                ?: "/collections/${collection.id}",
+            score = score,
+            createdAt = collection.updatedAt.toString(),
+            meta = mapOf(
+                "itemCount" to collection.itemCount.toString(),
+                "visibility" to collection.visibility.name,
+                "ownerType" to collection.ownerType.name,
+                "ownerId" to collection.ownerId
+            )
+        )
+
+    private fun commentSearchItem(comment: Comment, post: Post, score: Double, snippet: String?): ContentSearchItem =
+        ContentSearchItem(
+            type = "COMMENT",
+            id = comment.id,
+            title = post.title ?: post.text.take(80),
+            snippet = snippet ?: comment.text.take(180),
+            owner = comment.author,
+            url = "/p/${post.id}?comment=${comment.id}",
+            score = score,
+            createdAt = comment.createdAt.toString(),
+            postId = post.id,
+            commentId = comment.id,
+            tags = post.tags,
+            meta = mapOf("postId" to post.id)
+        )
+
+    private fun sortSearchItems(items: List<ContentSearchItem>, sort: String): List<ContentSearchItem> =
+        when (sort.lowercase()) {
+            "new" -> items.sortedByDescending { it.createdAt.orEmpty() }
+            "popular" -> items.sortedWith(compareByDescending<ContentSearchItem> { it.meta["likeCount"]?.toLongOrNull() ?: 0L }.thenByDescending { it.score })
+            else -> items.sortedWith(compareByDescending<ContentSearchItem> { it.score }.thenByDescending { it.createdAt.orEmpty() })
+        }
 
     companion object {
         const val STORY_VIDEO_MAX_MS = 60_000L

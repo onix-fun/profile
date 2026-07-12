@@ -3,6 +3,10 @@ package com.onix.content
 import com.onix.content.api.enrichUploadBlocks
 import com.onix.content.domain.*
 import com.onix.content.media.UploadedMedia
+import com.onix.content.search.SearchEventPublisher
+import com.onix.content.search.SearchIndexClient
+import com.onix.content.search.SearchIndexHit
+import com.onix.content.search.SearchIndexResult
 import com.onix.content.service.ContentService
 import com.onix.content.service.InMemoryContentRepository
 import kotlinx.serialization.json.JsonArray
@@ -538,6 +542,58 @@ class ContentServiceTest {
         assertFalse(detail.collection.previewBlocks.any { it.type == ContentBlockType.TEXT })
     }
 
+    @Test
+    fun `collections publish search index events when changed`() {
+        val publisher = RecordingSearchEvents()
+        val service = ContentService(repository = InMemoryContentRepository(), searchEvents = publisher, clock = fixedClock())
+        val post = service.createPost(user, CreatePostInput(text = "Saved post"))
+        val collection = service.createCollection(actor(user), CreateCollectionInput(title = "References"))
+        val visibility: (String) -> AccountVisibility = { ownerKey ->
+            val owner = ownerKey.toVisibilityOwner()
+            AccountVisibility(ownerId = owner.ownerId, ownerType = owner.ownerType, viewerId = user.id)
+        }
+
+        service.updateCollection(actor(user), UpdateCollectionInput(id = collection.id, description = "Updated"))
+        service.addPostToCollection(actor(user), collection.id, post.id, visibility)
+        service.removePostFromCollection(actor(user), collection.id, post.id)
+        service.deleteCollection(actor(user), collection.id)
+
+        assertTrue(publisher.events.contains("collection-upsert:${collection.id}"))
+        assertTrue(publisher.events.count { it == "collection-upsert:${collection.id}" } >= 4)
+        assertTrue(publisher.events.contains("collection-delete:${collection.id}"))
+    }
+
+    @Test
+    fun `search filters private collections and close friends posts by visibility`() {
+        val repository = InMemoryContentRepository()
+        val setup = ContentService(repository = repository, clock = fixedClock())
+        val hiddenPost = setup.createPost(user, CreatePostInput(text = "Hidden", visibility = Visibility.CLOSE_FRIENDS))
+        val publicCollection = setup.createCollection(actor(user), CreateCollectionInput(title = "Public references", visibility = CollectionVisibility.PUBLIC))
+        val privateCollection = setup.createCollection(actor(user), CreateCollectionInput(title = "Private references", visibility = CollectionVisibility.PRIVATE))
+        val service = ContentService(
+            repository = repository,
+            searchIndex = FakeSearchIndex(
+                mapOf(
+                    "posts" to listOf(hiddenPost.id),
+                    "collections" to listOf(publicCollection.id, privateCollection.id)
+                )
+            ),
+            clock = fixedClock()
+        )
+        val visibility: (String) -> AccountVisibility = { ownerKey ->
+            val owner = ownerKey.toVisibilityOwner()
+            AccountVisibility(ownerId = owner.ownerId, ownerType = owner.ownerType, viewerId = viewer.id, isCloseFriend = false)
+        }
+
+        val response = service.search(
+            viewer = OwnerRef(OwnerType.USER, viewer.id),
+            input = ContentSearchInput(query = "references", types = listOf("posts", "collections"), limit = 10),
+            visibilityResolver = visibility
+        )
+
+        assertEquals(listOf(publicCollection.id), response.items.map { it.id })
+    }
+
     private fun service() = ContentService(
         repository = InMemoryContentRepository(),
         clock = fixedClock()
@@ -563,4 +619,31 @@ class ContentServiceTest {
 private fun String.toVisibilityOwner(): OwnerRef {
     val parts = split(":", limit = 2)
     return if (parts.size == 2) OwnerRef(OwnerType.valueOf(parts[0]), parts[1]) else OwnerRef(OwnerType.USER, this)
+}
+
+private class FakeSearchIndex(private val idsByCollection: Map<String, List<String>>) : SearchIndexClient {
+    override fun search(collection: String, query: String, limit: Int): SearchIndexResult =
+        SearchIndexResult(idsByCollection[collection].orEmpty().take(limit).mapIndexed { index, id ->
+            SearchIndexHit(id = id, score = 1.0 - index * 0.01)
+        })
+}
+
+private class RecordingSearchEvents : SearchEventPublisher {
+    val events = mutableListOf<String>()
+
+    override fun postUpsert(post: Post) {
+        events.add("post-upsert:${post.id}")
+    }
+
+    override fun commentUpsert(comment: Comment) {
+        events.add("comment-upsert:${comment.id}")
+    }
+
+    override fun collectionUpsert(collection: SavedCollection) {
+        events.add("collection-upsert:${collection.id}")
+    }
+
+    override fun collectionDelete(collectionId: String) {
+        events.add("collection-delete:$collectionId")
+    }
 }

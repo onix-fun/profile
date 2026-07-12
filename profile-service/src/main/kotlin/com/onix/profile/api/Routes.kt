@@ -3,6 +3,7 @@ package com.onix.profile.api
 import com.onix.profile.account.*
 import com.onix.profile.config.AppConfig
 import com.onix.profile.content.ContentClient
+import com.onix.profile.content.ProfileSearchInput
 import com.onix.profile.domain.*
 import com.onix.profile.security.accessToken
 import io.github.smiley4.ktorswaggerui.SwaggerUI
@@ -24,7 +25,7 @@ import java.nio.charset.StandardCharsets
 
 fun Application.registerRoutes(config: AppConfig) {
     val account = AccountClient(config)
-    val content = ContentClient(config.contentApiUrl)
+    val content = ContentClient(config)
 
     install(CallLogging)
     install(DefaultHeaders) {
@@ -110,7 +111,7 @@ fun Application.registerRoutes(config: AppConfig) {
                     call.respond(shell)
                     return@get
                 }
-                val profileContent = content.profileContent(profile.ownerType, profile.id, token)
+                val profileContent = content.profileContent(profile.ownerType, profile.id, actor.activeOwner, token)
                 call.respond(CanvasMapper.toCanvas(profile, actor.user, profileContent, actor.activeOwner))
             }
 
@@ -125,7 +126,7 @@ fun Application.registerRoutes(config: AppConfig) {
                     call.respond(shell)
                     return@get
                 }
-                val profileContent = content.profileContent(profile.ownerType, profile.id, token)
+                val profileContent = content.profileContent(profile.ownerType, profile.id, actor.activeOwner, token)
                 call.respond(CanvasMapper.toCanvas(profile, actor.user, profileContent, actor.activeOwner))
             }
 
@@ -226,9 +227,62 @@ fun Application.registerRoutes(config: AppConfig) {
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: 10
                 call.respond(account.searchOwners(query, limit, token))
             }
+
+            get("/search") {
+                val token = call.accessToken() ?: return@get call.respondAuthRequired(config)
+                val actor = account.getCurrentActor(token)
+                val params = call.request.queryParameters
+                val input = ProfileSearchInput(
+                    query = params["q"].orEmpty(),
+                    types = params["types"].csv(),
+                    tags = params["tags"].csv().map { it.removePrefix("#") },
+                    author = params["author"]?.takeIf(String::isNotBlank),
+                    dateFrom = params["dateFrom"]?.takeIf(String::isNotBlank),
+                    dateTo = params["dateTo"]?.takeIf(String::isNotBlank),
+                    sort = params["sort"]?.takeIf(String::isNotBlank) ?: "relevance",
+                    limit = params["limit"]?.toIntOrNull()?.coerceIn(1, 100) ?: 20,
+                    cursor = params["cursor"]?.takeIf(String::isNotBlank)
+                )
+                call.respond(content.search(input, actor.activeOwner, token))
+            }
+
+            get("/search/suggest") {
+                val token = call.accessToken() ?: return@get call.respondAuthRequired(config)
+                val actor = account.getCurrentActor(token)
+                val query = call.request.queryParameters["q"].orEmpty()
+                val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 20) ?: 10
+                val owners = if (query.length >= 2) {
+                    account.searchOwners(query, limit, token).map {
+                        SearchSuggestion(
+                            type = "OWNER",
+                            value = it.username,
+                            label = it.displayName ?: "@${it.username}",
+                            owner = it
+                        )
+                    }
+                } else {
+                    emptyList()
+                }
+                val (contentSuggestions, contentErrors) = content.suggest(query, limit, actor.activeOwner, token)
+                call.respond(
+                    SearchSuggestResponse(
+                        query = query,
+                        suggestions = (owners + contentSuggestions)
+                            .distinctBy { "${it.type}:${it.value.lowercase()}" }
+                            .take(limit),
+                        partialErrors = contentErrors
+                    )
+                )
+            }
         }
     }
 }
+
+private fun String?.csv(): List<String> =
+    this.orEmpty()
+        .split(",")
+        .map(String::trim)
+        .filter(String::isNotBlank)
 
 private fun loadOwnerSocial(
     account: AccountClient,

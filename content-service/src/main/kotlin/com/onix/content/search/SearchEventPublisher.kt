@@ -2,6 +2,7 @@ package com.onix.content.search
 
 import com.onix.content.domain.Comment
 import com.onix.content.domain.Post
+import com.onix.content.domain.SavedCollection
 import com.rabbitmq.client.ConnectionFactory
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -15,11 +16,15 @@ import java.util.UUID
 interface SearchEventPublisher {
     fun postUpsert(post: Post)
     fun commentUpsert(comment: Comment)
+    fun collectionUpsert(collection: SavedCollection)
+    fun collectionDelete(collectionId: String)
 
     companion object {
         fun noop(): SearchEventPublisher = object : SearchEventPublisher {
             override fun postUpsert(post: Post) = Unit
             override fun commentUpsert(comment: Comment) = Unit
+            override fun collectionUpsert(collection: SavedCollection) = Unit
+            override fun collectionDelete(collectionId: String) = Unit
         }
     }
 }
@@ -61,11 +66,40 @@ class RabbitSearchEventPublisher(private val rabbitmqUrl: String?) : SearchEvent
         )
     }
 
-    private fun publish(collection: String, documentId: String, revision: Long, document: JsonObject) {
+    override fun collectionUpsert(collection: SavedCollection) {
+        publish(
+            collection = "collections",
+            documentId = collection.id,
+            revision = collection.updatedAt.toEpochMilli(),
+            document = JsonObject(
+                mapOf(
+                    "owner_type" to JsonPrimitive(collection.ownerType.name),
+                    "owner_id" to JsonPrimitive(collection.ownerId),
+                    "title" to JsonPrimitive(collection.title),
+                    "description" to JsonPrimitive(collection.description ?: ""),
+                    "visibility" to JsonPrimitive(collection.visibility.name),
+                    "item_count" to JsonPrimitive(collection.itemCount),
+                    "updated_at" to JsonPrimitive(collection.updatedAt.toString())
+                )
+            )
+        )
+    }
+
+    override fun collectionDelete(collectionId: String) {
+        publish(
+            collection = "collections",
+            documentId = collectionId,
+            revision = Instant.now().toEpochMilli(),
+            operation = "delete",
+            document = JsonObject(emptyMap())
+        )
+    }
+
+    private fun publish(collection: String, documentId: String, revision: Long, operation: String = "upsert", document: JsonObject) {
         if (rabbitmqUrl.isNullOrBlank()) return
         val event = IndexEvent(
             event_id = UUID.randomUUID().toString(),
-            operation = "upsert",
+            operation = operation,
             collection = collection,
             document_id = documentId,
             revision = revision.coerceAtLeast(1),

@@ -383,3 +383,40 @@ export interface AccountSearchUser {
   avatarUrl?: string | null;
   bio?: string | null;
 }
+
+export type UnifiedSearchType = "POST" | "COLLECTION" | "COMMENT" | "TAG";
+
+export interface SearchItem {
+  type: UnifiedSearchType;
+  id: string;
+  title?: string | null;
+  snippet?: string | null;
+  owner?: AccountUser | null;
+  url: string;
+  score: number;
+  createdAt?: string | null;
+  postId?: string | null;
+  commentId?: string | null;
+  tags: string[];
+  meta: Record<string, string>;
+}
+
+export interface SearchResponse {
+  query: string;
+  items: SearchItem[];
+  nextCursor?: string | null;
+  partialErrors: string[];
+}
+
+export interface SearchSuggestion {
+  type: "OWNER" | UnifiedSearchType | "TAG" | "RECENT";
+  value: string;
+  label: string;
+  owner?: AccountSearchUser | null;
+}
+
+export interface SearchSuggestResponse {
+  query: string;
+  suggestions: SearchSuggestion[];
+  partialErrors: string[];
+}

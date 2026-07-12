@@ -34,6 +34,8 @@ x-account-env: &account-env
 x-account-build: &account-build
   context: ./account-src
   dockerfile: ../account.Dockerfile
+  additional_contexts:
+    onix-design-system: ${ONIX_DESIGN_SYSTEM_CONTEXT:-../../onix-design-system}
 
 services:
   caddy:
@@ -95,6 +97,7 @@ services:
       dockerfile: content-service/Dockerfile
     environment:
       CONTENT_HTTP_PORT: "8080"
+      CONTENT_GRPC_PORT: "9091"
       CONTENT_ALLOWED_ORIGINS: http://profile.localhost:8088
       CONTENT_ACCOUNT_GRPC_URL: account:9097
       CONTENT_ACCOUNT_GRPC_TLS: "false"

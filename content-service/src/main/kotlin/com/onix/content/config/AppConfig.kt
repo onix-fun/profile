@@ -3,6 +3,7 @@ package com.onix.content.config
 data class AppConfig(
     val httpHost: String,
     val httpPort: Int,
+    val grpcPort: Int,
     val accountGrpcUrl: String,
     val accountGrpcTls: Boolean,
     val accountGrpcTrustCert: String?,
@@ -29,6 +30,7 @@ data class AppConfig(
             return AppConfig(
                 httpHost = value("CONTENT_HTTP_HOST", "0.0.0.0"),
                 httpPort = value("CONTENT_HTTP_PORT", "8080").toInt(),
+                grpcPort = value("CONTENT_GRPC_PORT", "9091").toInt(),
                 accountGrpcUrl = value("CONTENT_ACCOUNT_GRPC_URL", "localhost:9097"),
                 accountGrpcTls = value("CONTENT_ACCOUNT_GRPC_TLS", "false").toBoolean(),
                 accountGrpcTrustCert = optional("CONTENT_ACCOUNT_GRPC_TRUST_CERT"),

@@ -336,6 +336,55 @@ data class PostCollectionsState(
 )
 
 @Serializable
+data class ContentSearchInput(
+    val query: String = "",
+    val types: List<String> = emptyList(),
+    val tags: List<String> = emptyList(),
+    val author: String? = null,
+    val dateFrom: String? = null,
+    val dateTo: String? = null,
+    val sort: String = "relevance",
+    val limit: Int = 20,
+    val cursor: String? = null
+)
+
+@Serializable
+data class ContentSearchResponse(
+    val items: List<ContentSearchItem> = emptyList(),
+    val nextCursor: String? = null,
+    val partialErrors: List<String> = emptyList()
+)
+
+@Serializable
+data class ContentSearchItem(
+    val type: String,
+    val id: String,
+    val title: String? = null,
+    val snippet: String? = null,
+    val owner: AccountUser? = null,
+    val url: String,
+    val score: Double = 0.0,
+    val createdAt: String? = null,
+    val postId: String? = null,
+    val commentId: String? = null,
+    val tags: List<String> = emptyList(),
+    val meta: Map<String, String> = emptyMap()
+)
+
+@Serializable
+data class ContentSuggestion(
+    val type: String,
+    val value: String,
+    val label: String
+)
+
+@Serializable
+data class ContentSuggestResponse(
+    val suggestions: List<ContentSuggestion> = emptyList(),
+    val partialErrors: List<String> = emptyList()
+)
+
+@Serializable
 data class CreatePostInput(
     val title: String? = null,
     val text: String = "",

@@ -1,9 +1,10 @@
 FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend-build
 WORKDIR /app
+COPY --from=onix-design-system / /onix-design-system
 COPY frontend/package*.json ./
-RUN npm ci
+RUN rm -f package-lock.json && npm install --package-lock=false
 COPY frontend/ ./
-RUN npm run build
+RUN npm run build --ignore-scripts
 
 FROM eclipse-temurin:23-jdk AS backend-build
 WORKDIR /src

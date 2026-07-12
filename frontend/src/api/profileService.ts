@@ -1,5 +1,14 @@
 import { api } from "@/api/client";
-import type { AccountSearchUser, ProfileCanvasResponse, Relationship, SessionUser, SocialCanvasResponse, SocialFilter } from "@/api/types";
+import type {
+  AccountSearchUser,
+  ProfileCanvasResponse,
+  Relationship,
+  SearchResponse,
+  SearchSuggestResponse,
+  SessionUser,
+  SocialCanvasResponse,
+  SocialFilter,
+} from "@/api/types";
 
 export class ProfileService {
   static async session(): Promise<SessionUser> {
@@ -35,6 +44,40 @@ export class ProfileService {
 
   static async searchOwners(query: string, limit = 10): Promise<AccountSearchUser[]> {
     const response = await api.get<AccountSearchUser[]>("/profile-search/owners", {
+      params: { q: query, limit },
+    });
+    return response.data;
+  }
+
+  static async search(params: {
+    q: string;
+    types?: string[];
+    tags?: string[];
+    author?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    sort?: "relevance" | "new" | "popular";
+    limit?: number;
+    cursor?: string | null;
+  }): Promise<SearchResponse> {
+    const response = await api.get<SearchResponse>("/search", {
+      params: {
+        q: params.q,
+        types: params.types?.join(","),
+        tags: params.tags?.join(","),
+        author: params.author,
+        dateFrom: params.dateFrom,
+        dateTo: params.dateTo,
+        sort: params.sort,
+        limit: params.limit,
+        cursor: params.cursor || undefined,
+      },
+    });
+    return response.data;
+  }
+
+  static async searchSuggest(query: string, limit = 8): Promise<SearchSuggestResponse> {
+    const response = await api.get<SearchSuggestResponse>("/search/suggest", {
       params: { q: query, limit },
     });
     return response.data;

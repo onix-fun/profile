@@ -59,6 +59,7 @@ sourceSets {
     main {
         proto {
             srcDir("../dev/account-src/backend/src/main/proto")
+            srcDir("../shared-proto")
         }
     }
 }

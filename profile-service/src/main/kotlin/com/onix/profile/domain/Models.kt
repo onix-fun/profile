@@ -228,3 +228,42 @@ data class ErrorResponse(
 data class FollowResponse(
     val relationship: Relationship
 )
+
+@Serializable
+data class SearchResponse(
+    val query: String,
+    val items: List<SearchItem> = emptyList(),
+    val nextCursor: String? = null,
+    val partialErrors: List<String> = emptyList()
+)
+
+@Serializable
+data class SearchItem(
+    val type: String,
+    val id: String,
+    val title: String? = null,
+    val snippet: String? = null,
+    val owner: AccountUser? = null,
+    val url: String,
+    val score: Double = 0.0,
+    val createdAt: String? = null,
+    val postId: String? = null,
+    val commentId: String? = null,
+    val tags: List<String> = emptyList(),
+    val meta: Map<String, String> = emptyMap()
+)
+
+@Serializable
+data class SearchSuggestResponse(
+    val query: String,
+    val suggestions: List<SearchSuggestion> = emptyList(),
+    val partialErrors: List<String> = emptyList()
+)
+
+@Serializable
+data class SearchSuggestion(
+    val type: String,
+    val value: String,
+    val label: String,
+    val owner: AccountSearchUser? = null
+)

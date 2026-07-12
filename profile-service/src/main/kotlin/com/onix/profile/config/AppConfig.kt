@@ -11,6 +11,7 @@ data class AppConfig(
     val accountFrontendUrl: String,
     val contentApiUrl: String?,
     val contentGrpcUrl: String?,
+    val contentGrpcUrls: List<String>,
     val profilePublicUrl: String,
     val allowedOrigins: List<String>
 ) {
@@ -33,6 +34,10 @@ data class AppConfig(
                 accountFrontendUrl = value("PROFILE_ACCOUNT_FRONTEND_URL", "http://localhost:5174").trimEnd('/'),
                 contentApiUrl = env["PROFILE_CONTENT_API_URL"]?.takeIf(String::isNotBlank)?.trimEnd('/'),
                 contentGrpcUrl = env["PROFILE_CONTENT_GRPC_URL"]?.takeIf(String::isNotBlank),
+                contentGrpcUrls = (env["PROFILE_CONTENT_GRPC_URLS"] ?: env["PROFILE_CONTENT_GRPC_URL"].orEmpty())
+                    .split(",")
+                    .map(String::trim)
+                    .filter(String::isNotBlank),
                 profilePublicUrl = value("PROFILE_PUBLIC_URL", "http://localhost:5175").trimEnd('/'),
                 allowedOrigins = value("PROFILE_ALLOWED_ORIGINS", "http://localhost:5175,http://127.0.0.1:5175")
                     .split(",")

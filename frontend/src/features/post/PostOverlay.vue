@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { useToast } from "primevue/usetoast";
 import { ContentService } from "@/api/contentService";
@@ -40,6 +40,7 @@ const author = computed(() => post.value?.author || null);
 const authorName = computed(() => author.value?.username || post.value?.authorName || "User");
 const authorInitial = computed(() => authorName.value.slice(0, 1).toUpperCase());
 const sortedComments = computed(() => [...comments.value].sort((a, b) => Date.parse(a.createdAt || "") - Date.parse(b.createdAt || "")));
+const highlightedCommentId = computed(() => String(route.query.comment || ""));
 
 onMounted(async () => {
   await Promise.all([
@@ -54,9 +55,22 @@ async function loadPost() {
   try {
     post.value = await ContentService.post(postId.value);
     comments.value = await ContentService.comments(postId.value);
+    await scrollToHighlightedComment();
   } finally {
     isLoading.value = false;
   }
+}
+
+watch(highlightedCommentId, () => {
+  void scrollToHighlightedComment();
+});
+
+async function scrollToHighlightedComment() {
+  const id = highlightedCommentId.value;
+  if (!id) return;
+  commentsOpen.value = true;
+  await nextTick();
+  document.getElementById(`comment-${id}`)?.scrollIntoView({ block: "center", behavior: "smooth" });
 }
 
 function close() {
@@ -229,7 +243,13 @@ async function sendComment() {
         </section>
 
         <section class="comment-list">
-          <article v-for="comment in sortedComments" :key="comment.id" class="comment-item">
+          <article
+            v-for="comment in sortedComments"
+            :id="`comment-${comment.id}`"
+            :key="comment.id"
+            class="comment-item"
+            :class="{ highlighted: comment.id === highlightedCommentId }"
+          >
             <RouterLink class="comment-item__avatar" :to="ownerPath(commentAuthor(comment), commentAuthorName(comment))">
               <img v-if="commentAuthor(comment)?.avatarUrl" :src="commentAuthor(comment)?.avatarUrl || ''" alt="" />
               <span v-else>{{ commentAuthorName(comment).slice(0, 1).toUpperCase() }}</span>
@@ -473,6 +493,12 @@ async function sendComment() {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   gap: 10px;
+  border-radius: 8px;
+  padding: 4px;
+}
+
+.comment-item.highlighted {
+  background: rgba(250, 204, 21, 0.18);
 }
 
 .comment-item__avatar {

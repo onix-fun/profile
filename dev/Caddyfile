@@ -11,7 +11,7 @@ http://profile.localhost {
 		reverse_proxy account:8081
 	}
 
-	@accountApi path /api/auth* /api/users* /api/sessions* /api/search* /api/avatars* /api/notifications* /api/profile /api/profile/*
+	@accountApi path /api/auth* /api/users* /api/sessions* /api/avatars* /api/notifications* /api/profile /api/profile/*
 	handle @accountApi {
 		reverse_proxy account:8081
 	}
