@@ -54,13 +54,38 @@ export const router = createRouter({
       component: () => import("@/features/stories/StoryArchivePage.vue"),
     },
     {
+      path: "/o/:orgname/stories/archive",
+      name: "OrganizationStoryArchive",
+      component: () => import("@/features/stories/StoryArchivePage.vue"),
+    },
+    {
       path: "/u/:nickname/social",
       name: "SocialCanvas",
       component: () => import("@/features/profile/SocialCanvasPage.vue"),
     },
     {
+      path: "/o/:orgname/social",
+      name: "OrganizationSocialCanvas",
+      component: () => import("@/features/profile/SocialCanvasPage.vue"),
+    },
+    {
+      path: "/u/:nickname/collections/:collectionId",
+      name: "CollectionCanvas",
+      component: () => import("@/features/profile/CollectionCanvasPage.vue"),
+    },
+    {
+      path: "/o/:orgname/collections/:collectionId",
+      name: "OrganizationCollectionCanvas",
+      component: () => import("@/features/profile/CollectionCanvasPage.vue"),
+    },
+    {
       path: "/u/:nickname",
       name: "Profile",
+      component: () => import("@/features/profile/ProfilePage.vue"),
+    },
+    {
+      path: "/o/:orgname",
+      name: "OrganizationProfile",
       component: () => import("@/features/profile/ProfilePage.vue"),
     },
     {

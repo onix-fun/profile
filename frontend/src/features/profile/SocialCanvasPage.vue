@@ -28,9 +28,11 @@ const filters: Array<{ key: SocialFilter; label: string }> = [
   { key: "subscriptions", label: "Subscriptions" },
 ];
 
-const nickname = computed(() => String(route.params.nickname || ""));
+const isOrganizationRoute = computed(() => route.name === "OrganizationSocialCanvas" || Boolean(route.params.orgname));
+const ownerSlug = computed(() => String(isOrganizationRoute.value ? route.params.orgname || "" : route.params.nickname || ""));
 const activeFilter = computed<SocialFilter>(() => normalizeFilter(route.query.filter));
 const ownerName = computed(() => displayName(owner.value));
+const ownerProfilePath = computed(() => owner.value ? profilePath(owner.value.ownerType || "USER", owner.value.username) : "/");
 const layout = computed(() => owner.value ? buildSocialCanvasLayout(owner.value, users.value, viewportSize.value) : null);
 const stageStyle = computed(() => {
   if (!layout.value) return {};
@@ -50,7 +52,7 @@ const ownerStyle = computed(() => {
   };
 });
 
-watch(() => [route.params.nickname, route.query.filter], () => {
+watch(() => [route.params.nickname, route.params.orgname, route.query.filter], () => {
   void loadSocial();
 }, { flush: "post" });
 
@@ -84,7 +86,9 @@ async function loadSocial() {
   isLoading.value = true;
   errorMessage.value = null;
   try {
-    const response = await ProfileService.getSocial(nickname.value, activeFilter.value, 1, 80);
+    const response = isOrganizationRoute.value
+      ? await ProfileService.getOrganizationSocial(ownerSlug.value, activeFilter.value, 1, 80)
+      : await ProfileService.getSocial(ownerSlug.value, activeFilter.value, 1, 80);
     owner.value = response.owner;
     users.value = response.items;
     totalCount.value = response.totalCount;
@@ -136,9 +140,14 @@ function normalizeFilter(value: unknown): SocialFilter {
   return value === "subscribers" || value === "subscriptions" || value === "friends" ? value : "friends";
 }
 
-function displayName(user: Pick<RelatedUser, "firstName" | "lastName" | "username"> | AccountProfile | null): string {
+function displayName(user: Pick<RelatedUser, "displayName" | "firstName" | "lastName" | "username"> | AccountProfile | null): string {
   if (!user) return "Profile";
-  return [user.firstName, user.lastName].filter(Boolean).join(" ") || user.username;
+  return user.displayName || [user.firstName, user.lastName].filter(Boolean).join(" ") || user.username;
+}
+
+function profilePath(ownerType: "USER" | "ORGANIZATION", username: string): string {
+  const prefix = ownerType === "ORGANIZATION" ? "o" : "u";
+  return `/${prefix}/${encodeURIComponent(username)}`;
 }
 </script>
 
@@ -148,12 +157,12 @@ function displayName(user: Pick<RelatedUser, "firstName" | "lastName" | "usernam
       <i class="pi pi-lock"></i>
       <h1>Social unavailable</h1>
       <p>{{ errorMessage }}</p>
-      <RouterLink :to="`/u/${encodeURIComponent(nickname)}`">Back to profile</RouterLink>
+      <RouterLink :to="ownerProfilePath">Back to profile</RouterLink>
     </section>
 
     <section v-else class="social-canvas-shell">
       <div class="social-toolbar">
-        <RouterLink class="social-back" :to="`/u/${encodeURIComponent(nickname)}`" aria-label="Back to profile">
+        <RouterLink class="social-back" :to="ownerProfilePath" aria-label="Back to profile">
           <i class="pi pi-arrow-left"></i>
         </RouterLink>
         <div class="social-title">
@@ -175,9 +184,10 @@ function displayName(user: Pick<RelatedUser, "firstName" | "lastName" | "usernam
 
       <div ref="viewportElement" class="social-viewport" aria-label="Social canvas">
         <div v-if="layout && owner" class="social-stage" :style="stageStyle">
-          <RouterLink class="owner-node" :style="ownerStyle" :to="`/u/${encodeURIComponent(owner.username)}`">
+          <RouterLink class="owner-node" :style="ownerStyle" :to="ownerProfilePath">
             <span class="owner-avatar">
               <img v-if="owner.avatarUrl" :src="owner.avatarUrl" alt="" />
+              <i v-else-if="owner.ownerType === 'ORGANIZATION'" class="pi pi-building"></i>
               <span v-else>{{ ownerName.slice(0, 2).toUpperCase() }}</span>
             </span>
             <strong>{{ ownerName }}</strong>
@@ -186,13 +196,15 @@ function displayName(user: Pick<RelatedUser, "firstName" | "lastName" | "usernam
 
           <RouterLink
             v-for="node in layout.userNodes"
-            :key="node.id"
+            :key="`${node.user.ownerType || 'USER'}:${node.id}`"
             class="user-node"
+            :class="{ 'user-node--organization': node.user.ownerType === 'ORGANIZATION' }"
             :style="userNodeStyle(node)"
-            :to="`/u/${encodeURIComponent(node.user.username)}`"
+            :to="profilePath(node.user.ownerType || 'USER', node.user.username)"
           >
             <span class="user-avatar">
               <img v-if="node.user.avatarUrl" :src="node.user.avatarUrl" alt="" />
+              <i v-else-if="node.user.ownerType === 'ORGANIZATION'" class="pi pi-building"></i>
               <span v-else>{{ displayName(node.user).slice(0, 2).toUpperCase() }}</span>
             </span>
             <span class="user-capsule">
@@ -359,6 +371,11 @@ function displayName(user: Pick<RelatedUser, "firstName" | "lastName" | "usernam
   object-fit: cover;
 }
 
+.owner-avatar i,
+.user-avatar i {
+  color: var(--muted);
+}
+
 .owner-node strong {
   max-width: 118px;
   overflow: hidden;
@@ -378,6 +395,15 @@ function displayName(user: Pick<RelatedUser, "firstName" | "lastName" | "usernam
   align-items: center;
   gap: 0;
   filter: drop-shadow(0 14px 28px rgba(22, 34, 51, 0.11));
+}
+
+.user-node--organization .user-avatar {
+  background: rgba(20, 184, 166, 0.12);
+  color: #0f766e;
+}
+
+.user-node--organization .user-capsule {
+  border-color: rgba(20, 184, 166, 0.22);
 }
 
 .user-avatar {

@@ -1,25 +1,25 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { RouterLink, useRouter } from "vue-router";
 import { ContentService } from "@/api/contentService";
-import { ProfileService } from "@/api/profileService";
 import { mergeSeenState, sortStoryRail } from "@/features/stories/storyState";
 import { displayStoryAuthor } from "@/features/display/displayText";
-import type { SessionUser, StoryRailItem } from "@/api/types";
+import type { CurrentActor, StoryRailItem } from "@/api/types";
 
 const router = useRouter();
 const stories = ref<StoryRailItem[]>([]);
-const currentUser = ref<SessionUser | null>(null);
+const currentActor = ref<CurrentActor | null>(null);
 const isLoading = ref(false);
+const activeOwner = computed(() => currentActor.value?.activeOwner || null);
 
 onMounted(async () => {
   isLoading.value = true;
   try {
-    const [session, feed] = await Promise.all([
-      ProfileService.session(),
+    const [actor, feed] = await Promise.all([
+      ContentService.currentActor(),
       ContentService.storiesFeed(),
     ]);
-    currentUser.value = session;
+    currentActor.value = actor;
     stories.value = sortStoryRail(mergeSeenState(feed));
   } finally {
     isLoading.value = false;
@@ -31,7 +31,7 @@ function openStory(item: StoryRailItem) {
   if (firstStory) {
     void router.push({
       path: `/story/${encodeURIComponent(firstStory)}`,
-      query: { author: item.authorId },
+      query: { author: item.ownerId || item.authorId, ownerType: item.ownerType || "USER" },
     });
   }
 }
@@ -41,7 +41,11 @@ function authorAvatar(item: StoryRailItem): string {
 }
 
 function viewerItem(): StoryRailItem | null {
-  return stories.value.find((item) => item.isViewer || item.authorId === currentUser.value?.id) || null;
+  const owner = activeOwner.value;
+  return stories.value.find((item) => (
+    item.isViewer
+    || (owner && (item.ownerId || item.authorId) === owner.id && (item.ownerType || "USER") === (owner.ownerType || "USER"))
+  )) || null;
 }
 
 function otherItems(): StoryRailItem[] {
@@ -51,7 +55,17 @@ function otherItems(): StoryRailItem[] {
 
 function viewerAvatar(): string {
   const item = viewerItem();
-  return item ? authorAvatar(item) : currentUser.value?.avatarUrl || "";
+  return item ? authorAvatar(item) : activeOwner.value?.avatarUrl || "";
+}
+
+function viewerName(): string {
+  return activeOwner.value?.username || "Create";
+}
+
+function viewerInitial(): string {
+  const owner = activeOwner.value;
+  const name = owner?.displayName || owner?.username || "";
+  return name.slice(0, 1).toUpperCase();
 }
 </script>
 
@@ -75,15 +89,19 @@ function viewerAvatar(): string {
       <RouterLink v-else class="story-pill story-pill--create" to="/story/new" aria-label="Create story">
         <span class="story-ring">
           <img v-if="viewerAvatar()" :src="viewerAvatar()" alt="" />
-          <i v-else class="pi pi-plus"></i>
+          <span v-else>
+            <i v-if="activeOwner?.ownerType === 'ORGANIZATION'" class="pi pi-building"></i>
+            <strong v-else-if="viewerInitial()">{{ viewerInitial() }}</strong>
+            <i v-else class="pi pi-plus"></i>
+          </span>
           <small><i class="pi pi-plus"></i></small>
         </span>
-        <strong>{{ currentUser?.username || "Create" }}</strong>
+        <strong>{{ viewerName() }}</strong>
       </RouterLink>
 
       <button
         v-for="item in otherItems()"
-        :key="item.authorId"
+        :key="`${item.ownerType || 'USER'}:${item.ownerId || item.authorId}`"
         type="button"
         class="story-pill"
         :class="{ 'story-pill--seen': item.seen, 'story-pill--close': item.closeFriends }"
@@ -91,7 +109,10 @@ function viewerAvatar(): string {
       >
         <span class="story-ring">
           <img v-if="authorAvatar(item)" :src="authorAvatar(item)" alt="" />
-          <span v-else><i class="pi pi-user"></i></span>
+          <span v-else>
+            <i v-if="item.ownerType === 'ORGANIZATION'" class="pi pi-building"></i>
+            <i v-else class="pi pi-user"></i>
+          </span>
         </span>
         <strong>{{ displayStoryAuthor(item) }}</strong>
       </button>
@@ -111,7 +132,8 @@ function viewerAvatar(): string {
   overflow-x: auto;
   overflow-y: hidden;
   padding-block: max(10px, env(safe-area-inset-top)) 12px;
-  scrollbar-color: rgba(15, 23, 42, 0.24) transparent;
+  background: linear-gradient(180deg, rgba(5, 7, 11, 0.18), transparent);
+  scrollbar-color: rgba(45, 212, 191, 0.28) transparent;
   scrollbar-width: thin;
   pointer-events: auto;
 }
@@ -133,36 +155,66 @@ function viewerAvatar(): string {
   width: max-content;
   box-sizing: border-box;
   display: flex;
-  gap: 14px;
+  gap: 16px;
   align-items: center;
   margin-inline: auto;
   padding-inline: 20px;
 }
 
 .story-pill {
-  width: 72px;
-  min-width: 72px;
+  width: 76px;
+  min-width: 76px;
   display: grid;
   justify-items: center;
-  gap: 5px;
+  gap: 6px;
   border: 0;
   padding: 0;
   background: transparent;
-  color: #111827;
+  color: #0f172a;
   text-decoration: none;
   cursor: pointer;
+  transition: transform 180ms ease, opacity 180ms ease;
+}
+
+.story-pill:hover,
+.story-pill:focus-visible {
+  transform: translateY(-2px);
+}
+
+.story-pill:active {
+  transform: translateY(0) scale(0.96);
 }
 
 .story-ring {
-  width: 58px;
-  height: 58px;
+  position: relative;
+  width: 60px;
+  height: 60px;
   display: grid;
   place-items: center;
   border-radius: 999px;
-  padding: 3px;
+  padding: 4px;
   background:
-    conic-gradient(from 210deg, #f97316, #ec4899, #6366f1, #10b981, #f97316);
-  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.12);
+    conic-gradient(from 210deg, #22d3ee 0 42%, rgba(255, 255, 255, 0.32) 42% 48%, #818cf8 48% 72%, #22c55e 72% 100%);
+  box-shadow:
+    0 14px 36px rgba(15, 23, 42, 0.16),
+    0 0 22px rgba(45, 212, 191, 0.18);
+}
+
+.story-ring::before {
+  content: "";
+  position: absolute;
+  inset: -5px;
+  border-radius: inherit;
+  border: 1px solid rgba(45, 212, 191, 0.24);
+  opacity: 0;
+  transform: scale(0.86);
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+.story-pill:hover .story-ring::before,
+.story-pill:focus-visible .story-ring::before {
+  opacity: 1;
+  transform: scale(1);
 }
 
 .story-ring img,
@@ -172,62 +224,69 @@ function viewerAvatar(): string {
   height: 100%;
   display: grid;
   place-items: center;
-  border: 2px solid #ffffff;
+  border: 2px solid rgba(255, 255, 255, 0.96);
   border-radius: 999px;
   background: #ffffff;
   object-fit: cover;
-  color: #111827;
+  color: #0f172a;
   font-weight: 900;
 }
 
+.story-ring > span > strong {
+  max-width: none;
+  color: inherit;
+  font-size: 18px;
+  line-height: 1;
+}
+
 .story-pill strong {
-  max-width: 70px;
+  max-width: 76px;
   overflow: hidden;
-  color: #111827;
+  color: #0f172a;
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 900;
   line-height: 1.1;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .story-pill--seen .story-ring {
-  background: transparent;
+  background: rgba(15, 23, 42, 0.12);
   box-shadow: none;
-  padding: 0;
 }
 
 .story-pill--close .story-ring {
-  background: conic-gradient(from 220deg, #22c55e, #86efac, #22c55e);
+  background: conic-gradient(from 220deg, #22c55e, #86efac 45%, #22d3ee 76%, #22c55e);
 }
 
 .story-pill--seen.story-pill--close .story-ring {
-  background: transparent;
+  background: rgba(34, 197, 94, 0.16);
 }
 
 .story-pill--create .story-ring {
   position: relative;
-  background: #111827;
+  background: conic-gradient(from 210deg, #0f172a, #22d3ee, #0f172a);
 }
 
 .story-pill--create .story-ring > i {
-  background: #111827;
+  background: #0f172a;
   color: #ffffff;
 }
 
 .story-pill--create small {
   position: absolute;
-  right: -2px;
-  bottom: -2px;
+  right: -3px;
+  bottom: -3px;
   width: 22px;
   height: 22px;
   display: grid;
   place-items: center;
   border: 2px solid #ffffff;
   border-radius: 999px;
-  background: #111827;
+  background: #0f172a;
   color: #ffffff;
   font-size: 10px;
+  box-shadow: 0 0 18px rgba(45, 212, 191, 0.32);
 }
 
 .story-loading {

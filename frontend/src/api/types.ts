@@ -32,7 +32,9 @@ export interface Relationship {
 
 export interface AccountProfile {
   id: string;
+  ownerType?: "USER" | "ORGANIZATION";
   username: string;
+  displayName?: string | null;
   firstName?: string | null;
   lastName?: string | null;
   bio?: string | null;
@@ -47,15 +49,24 @@ export interface AccountProfile {
 
 export interface AccountUser {
   id: string;
+  ownerType?: "USER" | "ORGANIZATION";
   username: string;
+  displayName?: string | null;
   firstName?: string | null;
   lastName?: string | null;
   avatarUrl?: string | null;
 }
 
+export interface CurrentActor {
+  user: SessionUser;
+  activeOwner: AccountUser;
+}
+
 export interface ProfileContentPost {
   id: string;
   authorId?: string | null;
+  ownerType?: "USER" | "ORGANIZATION";
+  ownerId?: string | null;
   author?: AccountUser | null;
   authorName?: string | null;
   title?: string | null;
@@ -81,6 +92,47 @@ export interface ProfileContentComment {
   createdAt?: string | null;
 }
 
+export type CollectionVisibility = "PUBLIC" | "PRIVATE";
+
+export interface SavedCollection {
+  id: string;
+  ownerType?: "USER" | "ORGANIZATION";
+  ownerId: string;
+  title: string;
+  description?: string | null;
+  cover?: Record<string, unknown> | null;
+  visibility: CollectionVisibility;
+  itemCount: number;
+  previewBlocks: ContentBlock[];
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface CollectionDetail {
+  collection: SavedCollection;
+  posts: ProfileContentPost[];
+}
+
+export interface CreateCollectionInput {
+  title: string;
+  description?: string | null;
+  cover?: Record<string, unknown> | null;
+  visibility: CollectionVisibility;
+}
+
+export interface UpdateCollectionInput {
+  id: string;
+  title?: string;
+  description?: string | null;
+  cover?: Record<string, unknown> | null;
+  visibility?: CollectionVisibility;
+}
+
+export interface PostCollectionsState {
+  postId: string;
+  collectionIds: string[];
+}
+
 export interface ProfileCanvasResponse {
   status: "OK" | "BLOCKED" | "PRIVATE";
   profile?: AccountProfile | null;
@@ -88,6 +140,7 @@ export interface ProfileCanvasResponse {
     posts: ProfileContentPost[];
     stories: ProfileContentStory[];
     comments: ProfileContentComment[];
+    collections: SavedCollection[];
   };
   relationship?: Relationship | null;
   nodes: CanvasNode[];
@@ -103,7 +156,9 @@ export type SocialFilter = "friends" | "subscribers" | "subscriptions";
 
 export interface RelatedUser {
   id: string;
+  ownerType?: "USER" | "ORGANIZATION";
   username: string;
+  displayName?: string | null;
   firstName?: string | null;
   lastName?: string | null;
   avatarUrl?: string | null;
@@ -235,8 +290,11 @@ export interface StorySlide {
 export interface Story {
   id: string;
   authorId: string;
+  ownerType?: "USER" | "ORGANIZATION";
+  ownerId?: string;
   author?: {
     id?: string;
+    ownerType?: "USER" | "ORGANIZATION";
     username: string;
     firstName?: string | null;
     lastName?: string | null;
@@ -258,9 +316,12 @@ export interface Story {
 
 export interface StoryRailItem {
   authorId: string;
+  ownerType?: "USER" | "ORGANIZATION";
+  ownerId?: string;
   authorName: string;
   author?: {
     id?: string;
+    ownerType?: "USER" | "ORGANIZATION";
     username: string;
     firstName?: string | null;
     lastName?: string | null;
@@ -278,6 +339,8 @@ export interface StoryRailItem {
 
 export interface StoryGroup {
   authorId: string;
+  ownerType?: "USER" | "ORGANIZATION";
+  ownerId?: string;
   authorName: string;
   author?: Story["author"];
   avatarUrl?: string | null;
@@ -288,6 +351,7 @@ export interface StoryGroup {
 
 export interface StoryArchiveResponse {
   ownerId: string;
+  ownerType?: "USER" | "ORGANIZATION";
   owner?: Story["author"];
   stories: Story[];
   cursor?: string | null;
@@ -311,7 +375,9 @@ export interface SessionUser {
 
 export interface AccountSearchUser {
   id: string;
+  ownerType?: "USER" | "ORGANIZATION";
   username: string;
+  displayName?: string | null;
   firstName?: string | null;
   lastName?: string | null;
   avatarUrl?: string | null;

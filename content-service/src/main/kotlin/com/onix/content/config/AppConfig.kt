@@ -3,7 +3,11 @@ package com.onix.content.config
 data class AppConfig(
     val httpHost: String,
     val httpPort: Int,
-    val accountBaseUrl: String,
+    val accountGrpcUrl: String,
+    val accountGrpcTls: Boolean,
+    val accountGrpcTrustCert: String?,
+    val accountGrpcClientCert: String?,
+    val accountGrpcClientKey: String?,
     val mediaBaseUrl: String,
     val searchBaseUrl: String,
     val allowedOrigins: List<String>,
@@ -25,7 +29,11 @@ data class AppConfig(
             return AppConfig(
                 httpHost = value("CONTENT_HTTP_HOST", "0.0.0.0"),
                 httpPort = value("CONTENT_HTTP_PORT", "8080").toInt(),
-                accountBaseUrl = value("CONTENT_ACCOUNT_API_URL", "http://localhost:8089/api").trimEnd('/'),
+                accountGrpcUrl = value("CONTENT_ACCOUNT_GRPC_URL", "localhost:9097"),
+                accountGrpcTls = value("CONTENT_ACCOUNT_GRPC_TLS", "false").toBoolean(),
+                accountGrpcTrustCert = optional("CONTENT_ACCOUNT_GRPC_TRUST_CERT"),
+                accountGrpcClientCert = optional("CONTENT_ACCOUNT_GRPC_CLIENT_CERT"),
+                accountGrpcClientKey = optional("CONTENT_ACCOUNT_GRPC_CLIENT_KEY"),
                 mediaBaseUrl = value("CONTENT_MEDIA_API_URL", "http://localhost:8082").trimEnd('/'),
                 searchBaseUrl = value("CONTENT_SEARCH_API_URL", "http://localhost:8083").trimEnd('/'),
                 allowedOrigins = value("CONTENT_ALLOWED_ORIGINS", "http://localhost:5175,http://127.0.0.1:5175,http://profile.localhost:8088")

@@ -12,3 +12,10 @@ backend/.kotlin
 dev/.env
 dev/secrets
 dev/account-src
+!dev/account-src/
+dev/account-src/**
+!dev/account-src/backend/
+!dev/account-src/backend/src/
+!dev/account-src/backend/src/main/
+!dev/account-src/backend/src/main/proto/
+!dev/account-src/backend/src/main/proto/**

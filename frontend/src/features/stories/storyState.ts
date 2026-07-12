@@ -77,7 +77,7 @@ export function sortStoryRail(items: StoryRailItem[]): StoryRailItem[] {
   });
 }
 
-export function nextAuthorAfter(items: StoryRailItem[], authorId: string): StoryRailItem | null {
-  const index = items.findIndex((item) => item.authorId === authorId);
+export function nextAuthorAfter(items: StoryRailItem[], ownerId: string, ownerType: "USER" | "ORGANIZATION" = "USER"): StoryRailItem | null {
+  const index = items.findIndex((item) => (item.ownerId || item.authorId) === ownerId && (item.ownerType || "USER") === ownerType);
   return index >= 0 ? items[index + 1] || null : null;
 }

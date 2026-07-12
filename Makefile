@@ -1,8 +1,10 @@
 COMPOSE ?= docker compose
-GRADLE ?= gradle
+GRADLE ?= $(shell zsh -lc 'command -v gradle' 2>/dev/null || command -v gradle 2>/dev/null || echo gradle)
 DEV_ENV ?= dev/.env
+SHELL := /bin/zsh
+.SHELLFLAGS := -lc
 
-.PHONY: dev dev-account-source dev-env dev-keys frontend-install frontend-test frontend-build profile-test profile-build content-test content-build backend-test backend-build compose-config compose-down
+.PHONY: dev dev-account-source dev-env dev-keys frontend-install frontend-test frontend-build profile-test profile-build content-test content-build account-build backend-test backend-build compose-config compose-down
 
 frontend-install:
 	cd frontend && npm install
@@ -25,11 +27,15 @@ content-test:
 content-build:
 	cd content-service && $(GRADLE) installDist
 
+account-build:
+	cd dev/account-src/backend && ./gradlew build -x test --no-daemon
+
 backend-test: profile-test
 
-backend-build: profile-build
+backend-build: profile-build content-build
 
 dev: dev-env dev-keys dev-account-source
+	$(MAKE) account-build profile-build content-build
 	$(COMPOSE) --env-file $(DEV_ENV) -f dev/docker-compose.yml up --build
 
 dev-account-source:

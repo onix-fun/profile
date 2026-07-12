@@ -1,4 +1,4 @@
-import type { CanvasEdge, CanvasNode, ProfileCanvasResponse, ProfileContentPost } from "@/api/types";
+import type { CanvasEdge, CanvasNode, ProfileCanvasResponse, ProfileContentPost, SavedCollection } from "@/api/types";
 
 export type ProfileKnownNodeId =
   | "avatar"
@@ -12,11 +12,13 @@ export type ProfileKnownNodeId =
   | "followAction";
 
 export type ProfilePostNodeId = `post:${string}`;
-export type ProfileCanvasNodeId = ProfileKnownNodeId | ProfilePostNodeId;
+export type ProfileCollectionNodeId = `collection:${string}`;
+export type ProfileCanvasNodeId = ProfileKnownNodeId | ProfilePostNodeId | ProfileCollectionNodeId;
 
 export interface ProfileCanvasLayoutOptions {
   hasArchive?: boolean;
   archiveCount?: number;
+  mode?: "posts" | "collections";
 }
 
 export interface ProfileCanvasSize {
@@ -58,7 +60,7 @@ export const ORBIT_OFFSETS: Record<ProfileKnownNodeId, ProfileCanvasPoint> = {
   displayName: { x: 0, y: -230 },
   username: { x: 0, y: -158 },
   bio: { x: 0, y: 214 },
-  socialLinks: { x: -250, y: 190 },
+  socialLinks: { x: -310, y: 202 },
   birthday: { x: -292, y: 116 },
   social: { x: -310, y: -50 },
   archive: { x: -210, y: -234 },
@@ -70,7 +72,7 @@ const NODE_SIZES: Record<ProfileKnownNodeId, ProfileCanvasSize> = {
   displayName: { width: 220, height: 54 },
   username: { width: 190, height: 50 },
   bio: { width: 280, height: 88 },
-  socialLinks: { width: 250, height: 112 },
+  socialLinks: { width: 332, height: 184 },
   birthday: { width: 170, height: 52 },
   social: { width: 214, height: 94 },
   archive: { width: 176, height: 74 },
@@ -78,6 +80,7 @@ const NODE_SIZES: Record<ProfileKnownNodeId, ProfileCanvasSize> = {
 };
 
 const POST_NODE_SIZE: ProfileCanvasSize = { width: 136, height: 136 };
+const COLLECTION_NODE_SIZE: ProfileCanvasSize = { width: 176, height: 146 };
 const MIN_STAGE_WIDTH_EXTRA = 420;
 const STAGE_PADDING_X = 180;
 const COLLISION_GAP = 18;
@@ -93,12 +96,13 @@ export function buildProfileCanvasLayout(
   const visibleNodes = [
     ...response.nodes.filter(isKnownNode),
     ...(options.hasArchive ? [archiveNode(options.archiveCount || 0)] : []),
-    ...postNodes(response.content?.posts || []),
+    ...(options.mode === "collections" ? collectionNodes(response.content?.collections || []) : postNodes(response.content?.posts || [])),
   ];
   const visibleIds = new Set<ProfileCanvasNodeId>(visibleNodes.map((node) => node.id));
   const verticalScale = Math.min(1, Math.max(0.58, (viewport.height / 2 - 62) / 300));
-  const postOffsets = profilePostOffsets(response.content?.posts?.length || 0, viewport);
-  const relativeNodes = resolveCollisions(visibleNodes.map((node) => positionRelativeNode(node, verticalScale, postOffsets)), viewport);
+  const itemCount = options.mode === "collections" ? response.content?.collections?.length || 0 : response.content?.posts?.length || 0;
+  const itemOffsets = profileItemOffsets(itemCount, viewport, options.mode === "collections" ? COLLECTION_NODE_SIZE : POST_NODE_SIZE);
+  const relativeNodes = resolveCollisions(visibleNodes.map((node) => positionRelativeNode(node, verticalScale, itemOffsets)), viewport);
   const rawBounds = boundsFor(relativeNodes);
   const contentWidth = Math.max(Math.abs(rawBounds.minX), Math.abs(rawBounds.maxX)) * 2 + STAGE_PADDING_X * 2;
   const stage = {
@@ -133,6 +137,10 @@ function isPostNodeId(id: ProfileCanvasNodeId): id is ProfilePostNodeId {
   return id.startsWith("post:");
 }
 
+function isCollectionNodeId(id: ProfileCanvasNodeId): id is ProfileCollectionNodeId {
+  return id.startsWith("collection:");
+}
+
 function postNodes(posts: ProfileContentPost[]): Array<CanvasNode & { id: ProfilePostNodeId }> {
   return [...posts]
     .sort((a, b) => Date.parse(b.createdAt || "") - Date.parse(a.createdAt || ""))
@@ -142,6 +150,20 @@ function postNodes(posts: ProfileContentPost[]): Array<CanvasNode & { id: Profil
       position: { x: 0, y: 0 },
       data: {
         postId: post.id,
+        index,
+      },
+    }));
+}
+
+function collectionNodes(collections: SavedCollection[]): Array<CanvasNode & { id: ProfileCollectionNodeId }> {
+  return [...collections]
+    .sort((a, b) => Date.parse(b.updatedAt || b.createdAt || "") - Date.parse(a.updatedAt || a.createdAt || ""))
+    .map((collection, index) => ({
+      id: `collection:${collection.id}` as ProfileCollectionNodeId,
+      type: "collection",
+      position: { x: 0, y: 0 },
+      data: {
+        collectionId: collection.id,
         index,
       },
     }));
@@ -160,15 +182,18 @@ function archiveNode(count: number): CanvasNode & { id: "archive" } {
 }
 
 function positionRelativeNode(
-  node: (CanvasNode & { id: ProfileKnownNodeId }) | (CanvasNode & { id: ProfilePostNodeId }),
+  node: (CanvasNode & { id: ProfileKnownNodeId }) | (CanvasNode & { id: ProfilePostNodeId }) | (CanvasNode & { id: ProfileCollectionNodeId }),
   verticalScale: number,
-  postOffsets: ProfileCanvasPoint[],
+  itemOffsets: ProfileCanvasPoint[],
 ): PositionedProfileCanvasNode {
-  const size = isPostNodeId(node.id) ? POST_NODE_SIZE : NODE_SIZES[node.id];
-  const offset = isPostNodeId(node.id) ? postOffsets[Number(node.data.index || 0)] || postOffsets[0] || { x: POST_GRID_START_X, y: 0 } : ORBIT_OFFSETS[node.id];
+  const isRightItem = isPostNodeId(node.id) || isCollectionNodeId(node.id);
+  const size = isCollectionNodeId(node.id) ? COLLECTION_NODE_SIZE : isPostNodeId(node.id) ? POST_NODE_SIZE : NODE_SIZES[node.id];
+  const offset = isRightItem
+    ? itemOffsets[Number(node.data.index || 0)] || itemOffsets[0] || { x: POST_GRID_START_X, y: 0 }
+    : ORBIT_OFFSETS[node.id as ProfileKnownNodeId];
   const center = {
     x: offset.x,
-    y: isPostNodeId(node.id) ? offset.y : offset.y * verticalScale,
+    y: isRightItem ? offset.y : offset.y * verticalScale,
   };
 
   return {
@@ -197,13 +222,13 @@ function positionAbsoluteNode(
   };
 }
 
-function profilePostOffsets(count: number, viewport: ProfileCanvasSize): ProfileCanvasPoint[] {
+function profileItemOffsets(count: number, viewport: ProfileCanvasSize, size: ProfileCanvasSize): ProfileCanvasPoint[] {
   if (count <= 0) return [];
-  const maxY = Math.max(110, viewport.height / 2 - POST_NODE_SIZE.height / 2 - 18);
-  const rowPitch = POST_NODE_SIZE.height + POST_GRID_ROW_GAP;
+  const maxY = Math.max(110, viewport.height / 2 - size.height / 2 - 18);
+  const rowPitch = size.height + POST_GRID_ROW_GAP;
   const maxRows = Math.max(1, Math.floor((maxY * 2 + POST_GRID_ROW_GAP) / rowPitch));
   const rowCount = Math.max(1, Math.min(5, maxRows));
-  const columnPitch = POST_NODE_SIZE.width + POST_GRID_COLUMN_GAP;
+  const columnPitch = size.width + POST_GRID_COLUMN_GAP;
   const offsets: ProfileCanvasPoint[] = [];
   let column = 0;
 

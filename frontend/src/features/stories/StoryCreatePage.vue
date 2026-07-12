@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { useRouter } from "vue-router";
+import { RouterLink, useRouter } from "vue-router";
 import { useToast } from "primevue/usetoast";
 import { ContentService } from "@/api/contentService";
-import type { StoryBlock } from "@/api/types";
+import type { CurrentActor, StoryBlock } from "@/api/types";
 import {
   emptyStoryComposerState,
   extractStoryTags,
@@ -13,6 +13,7 @@ import {
 const router = useRouter();
 const toast = useToast();
 const state = ref(emptyStoryComposerState());
+const currentActor = ref<CurrentActor | null>(null);
 const stream = ref<MediaStream | null>(null);
 const devices = ref<MediaDeviceInfo[]>([]);
 const selectedDeviceId = ref("");
@@ -33,9 +34,18 @@ const maxStoryVideoMs = 60_000;
 const isRecording = computed(() => state.value.status === "recording");
 const isEditing = computed(() => state.value.status === "edit" || state.value.status === "publishing");
 const storyTags = computed(() => extractStoryTags(state.value.caption));
+const activeOwner = computed(() => currentActor.value?.activeOwner || null);
+const activeOwnerName = computed(() => activeOwner.value?.displayName || activeOwner.value?.username || "User");
+const activeOwnerInitial = computed(() => activeOwnerName.value.slice(0, 1).toUpperCase());
+const activeOwnerPath = computed(() => activeOwner.value ? ownerPath(activeOwner.value.ownerType || "USER", activeOwner.value.username) : "/");
 
 function setState(action: Parameters<typeof reduceStoryComposer>[1]) {
   state.value = reduceStoryComposer(state.value, action);
+}
+
+function ownerPath(ownerType: "USER" | "ORGANIZATION", username: string): string {
+  const prefix = ownerType === "ORGANIZATION" ? "o" : "u";
+  return `/${prefix}/${encodeURIComponent(username)}`;
 }
 
 function stopStream() {
@@ -262,7 +272,7 @@ async function publish() {
       [mediaFile.value],
     );
     toast.add({ severity: "success", summary: "Story published", life: 2500 });
-    await router.push({ path: `/story/${story.id}`, query: { author: story.authorId } });
+    await router.push({ path: `/story/${story.id}`, query: { author: story.ownerId || story.authorId, ownerType: story.ownerType || "USER" } });
   } catch (error) {
     toast.add({ severity: "error", summary: "Story", detail: error instanceof Error ? error.message : "Unable to publish story", life: 5000 });
     setState({ type: "EDIT" });
@@ -270,8 +280,17 @@ async function publish() {
 }
 
 onMounted(() => {
+  void loadCurrentActor();
   void openCamera();
 });
+
+async function loadCurrentActor() {
+  try {
+    currentActor.value = await ContentService.currentActor();
+  } catch {
+    currentActor.value = null;
+  }
+}
 
 onBeforeUnmount(() => {
   clearHoldTimer();
@@ -286,7 +305,17 @@ onBeforeUnmount(() => {
   <section class="story-composer" :class="{ 'story-composer--edit': isEditing }">
     <header class="story-topbar">
       <button type="button" aria-label="Close" @click="router.push('/')"><i class="pi pi-times"></i></button>
-      <span>{{ isEditing ? "Edit story" : "Create story" }}</span>
+      <div class="story-title-group">
+        <span>{{ isEditing ? "Edit story" : "Create story" }}</span>
+        <RouterLink v-if="activeOwner" class="story-owner-pill" :to="activeOwnerPath" :title="activeOwnerName">
+          <span class="story-owner-avatar">
+            <img v-if="activeOwner.avatarUrl" :src="activeOwner.avatarUrl" alt="" />
+            <i v-else-if="activeOwner.ownerType === 'ORGANIZATION'" class="pi pi-building"></i>
+            <strong v-else>{{ activeOwnerInitial }}</strong>
+          </span>
+          <small>{{ activeOwnerName }} · @{{ activeOwner.username }}</small>
+        </RouterLink>
+      </div>
       <button v-if="isEditing" type="button" :disabled="state.status === 'publishing'" @click="publish">
         <i class="pi pi-send"></i>
         <span>{{ state.status === "publishing" ? "Publishing" : "Publish" }}</span>
@@ -369,13 +398,19 @@ onBeforeUnmount(() => {
 .story-composer {
   min-height: 100dvh;
   overflow: hidden;
-  background: #05070b;
+  background:
+    radial-gradient(circle at 18% 18%, rgba(45, 212, 191, 0.16), transparent 28%),
+    radial-gradient(circle at 82% 20%, rgba(129, 140, 248, 0.14), transparent 28%),
+    #05070b;
   color: #ffffff;
 }
 
 .story-composer--edit {
-  background: linear-gradient(180deg, #ffffff 0%, #f7f9fb 100%);
-  color: #111827;
+  background:
+    radial-gradient(circle at 20% 20%, rgba(45, 212, 191, 0.14), transparent 30%),
+    radial-gradient(circle at 84% 18%, rgba(129, 140, 248, 0.14), transparent 28%),
+    #05070b;
+  color: #ffffff;
 }
 
 .story-topbar {
@@ -411,11 +446,61 @@ onBeforeUnmount(() => {
 }
 
 .story-composer--edit .story-topbar button {
-  background: #111827;
+  background: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+  backdrop-filter: blur(16px);
 }
 
 .story-topbar span {
   font-weight: 900;
+}
+
+.story-title-group {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  min-width: 0;
+  pointer-events: auto;
+}
+
+.story-owner-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: min(260px, 46vw);
+  border-radius: 999px;
+  padding: 5px 9px 5px 5px;
+  background: rgba(255, 255, 255, 0.13);
+  color: #ffffff;
+  text-decoration: none;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(16px);
+}
+
+.story-owner-avatar {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.72);
+  color: #ffffff;
+  font-size: 11px;
+}
+
+.story-owner-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.story-owner-pill small {
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .capture-stage {
@@ -480,10 +565,14 @@ onBeforeUnmount(() => {
   gap: 8px;
   border-radius: 999px;
   padding: 8px 12px;
-  background: rgba(15, 23, 42, 0.52);
+  background: rgba(9, 13, 20, 0.58);
   font-size: 12px;
   font-weight: 900;
   transform: translateX(-50%);
+  backdrop-filter: blur(16px);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.12),
+    0 14px 38px rgba(0, 0, 0, 0.28);
 }
 
 .recording-indicator span {
@@ -521,10 +610,19 @@ onBeforeUnmount(() => {
   height: 58px;
   display: grid;
   place-items: center;
-  background: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.14);
   color: #ffffff;
   font-size: 20px;
-  backdrop-filter: blur(12px);
+  backdrop-filter: blur(16px);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.14),
+    0 16px 44px rgba(0, 0, 0, 0.26);
+  transition: transform 160ms ease, background 160ms ease;
+}
+
+.side-control:hover {
+  transform: translateY(-2px);
+  background: rgba(255, 255, 255, 0.22);
 }
 
 .side-control--hidden {
@@ -534,15 +632,20 @@ onBeforeUnmount(() => {
 .record-button {
   width: 86px;
   height: 86px;
-  border: 5px solid #ffffff;
-  background: #ffffff;
-  box-shadow: inset 0 0 0 8px #ef4444;
-  transition: transform 140ms ease, border-radius 140ms ease;
+  border: 0;
+  background:
+    radial-gradient(circle, #ffffff 0 44%, transparent 45%),
+    conic-gradient(from 210deg, #22d3ee, #818cf8 42%, #ef4444 62%, #22c55e 84%, #22d3ee);
+  box-shadow:
+    0 0 0 8px rgba(255, 255, 255, 0.12),
+    0 0 42px rgba(45, 212, 191, 0.36);
+  transition: transform 140ms ease, border-radius 140ms ease, filter 140ms ease;
 }
 
 .record-button.active {
-  border-radius: 24px;
-  transform: scale(0.88);
+  border-radius: 28px;
+  filter: drop-shadow(0 0 28px rgba(239, 68, 68, 0.46));
+  transform: scale(0.88) rotate(45deg);
 }
 
 .edit-stage {
@@ -550,21 +653,50 @@ onBeforeUnmount(() => {
   min-height: 100dvh;
   margin: 0 auto;
   display: grid;
-  grid-template-columns: minmax(280px, 390px) minmax(0, 1fr);
-  gap: 28px;
+  grid-template-columns: minmax(280px, 440px) minmax(0, 1fr);
+  gap: 34px;
   align-items: center;
   padding: 96px clamp(16px, 4vw, 36px) 36px;
 }
 
 .phone-preview {
   position: relative;
-  width: min(390px, 100%);
-  aspect-ratio: 9 / 16;
+  width: min(420px, 82vw);
+  aspect-ratio: 1;
   overflow: hidden;
-  border: 8px solid #111827;
-  border-radius: 34px;
-  background: #111827;
-  box-shadow: 0 30px 90px rgba(15, 23, 42, 0.26);
+  border: 9px solid transparent;
+  border-radius: 999px;
+  background:
+    linear-gradient(#101827, #101827) padding-box,
+    conic-gradient(from 210deg, #22d3ee, #818cf8 40%, #22c55e 74%, #22d3ee) border-box;
+  box-shadow:
+    0 36px 110px rgba(0, 0, 0, 0.42),
+    0 0 44px rgba(45, 212, 191, 0.24);
+}
+
+.phone-preview::before,
+.phone-preview::after {
+  content: "";
+  position: absolute;
+  z-index: 3;
+  border-radius: 999px;
+  pointer-events: none;
+}
+
+.phone-preview::before {
+  inset: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.phone-preview::after {
+  right: 12%;
+  bottom: 8%;
+  width: 17px;
+  height: 17px;
+  background: #ffffff;
+  box-shadow:
+    -128px -300px 0 -5px rgba(34, 211, 238, 0.78),
+    36px -248px 0 -4px rgba(34, 197, 94, 0.7);
 }
 
 .phone-preview img,
@@ -576,30 +708,39 @@ onBeforeUnmount(() => {
 
 .phone-preview audio {
   position: absolute;
-  left: 18px;
-  right: 18px;
-  bottom: 88px;
-  width: calc(100% - 36px);
+  left: 15%;
+  right: 15%;
+  bottom: 42%;
+  width: 70%;
 }
 
 .caption-peek {
   position: absolute;
-  left: 16px;
-  right: 16px;
-  bottom: 18px;
-  max-height: 58px;
+  z-index: 4;
+  left: 13%;
+  right: 13%;
+  bottom: 12%;
+  max-height: 64px;
   overflow: hidden;
-  border-radius: 12px;
+  border-radius: 18px;
   padding: 12px;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(5, 7, 11, 0.58);
   color: #ffffff;
   font-weight: 800;
   line-height: 1.3;
+  backdrop-filter: blur(14px);
 }
 
 .story-edit-panel {
   display: grid;
   gap: 16px;
+  border-radius: 28px;
+  padding: 22px;
+  background: rgba(9, 13, 20, 0.56);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.12),
+    0 26px 70px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(18px);
 }
 
 .story-edit-panel label {
@@ -608,7 +749,7 @@ onBeforeUnmount(() => {
 }
 
 .story-edit-panel label > span {
-  color: #64748b;
+  color: rgba(255, 255, 255, 0.62);
   font-size: 12px;
   font-weight: 900;
   text-transform: uppercase;
@@ -617,13 +758,17 @@ onBeforeUnmount(() => {
 .story-edit-panel textarea,
 .story-edit-panel select {
   width: 100%;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.94);
-  color: #111827;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
   font: inherit;
   font-weight: 800;
   outline: 0;
+}
+
+.story-edit-panel textarea::placeholder {
+  color: rgba(255, 255, 255, 0.44);
 }
 
 .story-edit-panel textarea {
@@ -647,14 +792,14 @@ onBeforeUnmount(() => {
 .story-tags span {
   padding: 7px 10px;
   border-radius: 999px;
-  background: #ecfdf5;
-  color: #047857;
+  background: rgba(45, 212, 191, 0.14);
+  color: #99f6e4;
   font-size: 12px;
   font-weight: 900;
 }
 
 .story-tags small {
-  color: #64748b;
+  color: rgba(255, 255, 255, 0.56);
   font-weight: 800;
 }
 
@@ -664,8 +809,8 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  background: #111827;
-  color: #ffffff;
+  background: #ffffff;
+  color: #0f172a;
 }
 
 .publish-story:disabled {

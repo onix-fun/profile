@@ -16,6 +16,7 @@ import java.time.ZoneOffset
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class ContentServiceTest {
@@ -427,11 +428,139 @@ class ContentServiceTest {
         assertEquals(0L, unliked.likeCount)
     }
 
+    @Test
+    fun `collection title is required and collections are scoped to active owner`() {
+        val service = service()
+        val error = assertFailsWith<IllegalArgumentException> {
+            service.createCollection(actor(viewer), CreateCollectionInput(title = " "))
+        }
+
+        val collection = service.createCollection(actor(viewer), CreateCollectionInput(title = "Saved", visibility = CollectionVisibility.PRIVATE))
+
+        assertEquals("Collection title is required", error.message)
+        assertEquals(viewer.id, collection.ownerId)
+        assertEquals(CollectionVisibility.PRIVATE, collection.visibility)
+    }
+
+    @Test
+    fun `private collections are visible only to owner while public follows profile access`() {
+        val service = service()
+        service.createCollection(actor(user), CreateCollectionInput(title = "Private", visibility = CollectionVisibility.PRIVATE))
+        service.createCollection(actor(user), CreateCollectionInput(title = "Public", visibility = CollectionVisibility.PUBLIC))
+
+        val ownerView = service.collections(
+            OwnerRef(OwnerType.USER, user.id),
+            AccountVisibility(ownerId = user.id, viewerId = user.id),
+            10
+        )
+        val viewerView = service.collections(
+            OwnerRef(OwnerType.USER, user.id),
+            AccountVisibility(ownerId = user.id, viewerId = viewer.id),
+            10
+        )
+        val lockedView = service.collections(
+            OwnerRef(OwnerType.USER, user.id),
+            AccountVisibility(ownerId = user.id, viewerId = viewer.id, isPrivate = true),
+            10
+        )
+
+        assertEquals(setOf("Private", "Public"), ownerView.map { it.title }.toSet())
+        assertEquals(listOf("Public"), viewerView.map { it.title })
+        assertTrue(lockedView.isEmpty())
+    }
+
+    @Test
+    fun `post cannot be saved when viewer cannot access it`() {
+        val service = service()
+        val post = service.createPost(user, CreatePostInput(text = "Close", visibility = Visibility.CLOSE_FRIENDS))
+        val collection = service.createCollection(actor(viewer), CreateCollectionInput(title = "Saved"))
+
+        val error = assertFailsWith<IllegalArgumentException> {
+            service.setPostCollections(
+                actor = actor(viewer),
+                input = SetPostCollectionsInput(postId = post.id, collectionIds = listOf(collection.id)),
+                visibilityResolver = { ownerKey ->
+                    val owner = ownerKey.toVisibilityOwner()
+                    AccountVisibility(ownerId = owner.ownerId, ownerType = owner.ownerType, viewerId = viewer.id, isCloseFriend = false)
+                }
+            )
+        }
+
+        assertEquals("Post is not available", error.message)
+    }
+
+    @Test
+    fun `set post collections is idempotent and supports multiple collections`() {
+        val service = service()
+        val post = service.createPost(user, CreatePostInput(text = "Visible"))
+        val first = service.createCollection(actor(viewer), CreateCollectionInput(title = "First"))
+        val second = service.createCollection(actor(viewer), CreateCollectionInput(title = "Second"))
+        val visibility: (String) -> AccountVisibility = { ownerKey ->
+            val owner = ownerKey.toVisibilityOwner()
+            AccountVisibility(ownerId = owner.ownerId, ownerType = owner.ownerType, viewerId = viewer.id)
+        }
+
+        val saved = service.setPostCollections(actor(viewer), SetPostCollectionsInput(post.id, listOf(first.id, second.id)), visibility)
+        val savedAgain = service.setPostCollections(actor(viewer), SetPostCollectionsInput(post.id, listOf(second.id, first.id)), visibility)
+        val reduced = service.setPostCollections(actor(viewer), SetPostCollectionsInput(post.id, listOf(second.id)), visibility)
+
+        assertEquals(setOf(first.id, second.id), saved.collectionIds.toSet())
+        assertEquals(setOf(first.id, second.id), savedAgain.collectionIds.toSet())
+        assertEquals(listOf(second.id), reduced.collectionIds)
+    }
+
+    @Test
+    fun `collection preview uses up to three visible media posts`() {
+        val service = service()
+        val collection = service.createCollection(actor(viewer), CreateCollectionInput(title = "Media", visibility = CollectionVisibility.PUBLIC))
+        val posts = (1..4).map { index ->
+            service.createPost(user, CreatePostInput(
+                text = "Media $index",
+                blocks = listOf(ContentBlock(
+                    id = "33333333-3333-3333-3333-33333333333$index",
+                    type = if (index % 2 == 0) ContentBlockType.VIDEO else ContentBlockType.IMAGE,
+                    data = JsonObject(mapOf("src" to JsonPrimitive("https://example.test/$index.jpg")))
+                ))
+            ))
+        }
+        val visibility: (String) -> AccountVisibility = { ownerKey ->
+            val owner = ownerKey.toVisibilityOwner()
+            AccountVisibility(ownerId = owner.ownerId, ownerType = owner.ownerType, viewerId = viewer.id)
+        }
+        posts.forEach {
+            service.addPostToCollection(actor(viewer), collection.id, it.id, visibility)
+        }
+
+        val detail = service.collection(collection.id, OwnerRef(OwnerType.USER, viewer.id), visibility)
+
+        assertEquals(4, detail.collection.itemCount)
+        assertEquals(3, detail.collection.previewBlocks.size)
+        assertFalse(detail.collection.previewBlocks.any { it.type == ContentBlockType.TEXT })
+    }
+
     private fun service() = ContentService(
         repository = InMemoryContentRepository(),
         clock = fixedClock()
     )
 
+    private fun actor(user: SessionUser, ownerType: OwnerType = OwnerType.USER) =
+        CurrentActor(
+            user = user,
+            activeOwner = AccountUser(
+                id = user.id,
+                ownerType = ownerType,
+                username = user.username,
+                firstName = user.firstName,
+                lastName = user.lastName,
+                avatarUrl = user.avatarUrl
+            )
+        )
+
     private fun fixedClock(): Clock =
         Clock.fixed(Instant.parse("2026-07-05T00:00:00Z"), ZoneOffset.UTC)
+}
+
+private fun String.toVisibilityOwner(): OwnerRef {
+    val parts = split(":", limit = 2)
+    return if (parts.size == 2) OwnerRef(OwnerType.valueOf(parts[0]), parts[1]) else OwnerRef(OwnerType.USER, this)
 }

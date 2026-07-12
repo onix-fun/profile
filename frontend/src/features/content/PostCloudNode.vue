@@ -20,6 +20,7 @@ const emit = defineEmits<{
   open: [];
   like: [];
   comments: [];
+  bookmark: [];
 }>();
 
 const blocks = computed(() => props.post.blocks || []);
@@ -78,7 +79,7 @@ const authorAvatar = computed(() => props.post.author?.avatarUrl || "");
       </span>
     </button>
 
-    <span v-if="mode !== 'full' && mode !== 'profile'" class="post-cloud__actions" :class="{ disabled: disabledActions }">
+    <span v-if="mode !== 'full'" class="post-cloud__actions" :class="{ disabled: disabledActions }">
       <button type="button" title="Like" :disabled="disabledActions" @click.stop="emit('like')">
         <i :class="post.likedByViewer ? 'pi pi-heart-fill' : 'pi pi-heart'"></i>
         <span>{{ post.likeCount || 0 }}</span>
@@ -86,7 +87,7 @@ const authorAvatar = computed(() => props.post.author?.avatarUrl || "");
       <button type="button" title="Comments" :disabled="disabledActions" @click.stop="emit('comments')">
         <i class="pi pi-comments"></i>
       </button>
-      <button type="button" title="Bookmark" :disabled="disabledActions">
+      <button type="button" title="Bookmark" :disabled="disabledActions" @click.stop="emit('bookmark')">
         <i class="pi pi-bookmark"></i>
       </button>
     </span>

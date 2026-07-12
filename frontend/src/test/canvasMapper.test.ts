@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { accountSettingsUrl } from "@/features/profile/accountLinks";
+import { buildCollectionCanvasLayout } from "@/features/profile/collectionCanvasLayout";
 import { buildProfileCanvasLayout, ORBIT_OFFSETS } from "@/features/profile/profileCanvasLayout";
 import { buildSocialCanvasLayout, socialNodesOverlap } from "@/features/profile/socialCanvasLayout";
 import type { AccountProfile, ProfileCanvasResponse, RelatedUser } from "@/api/types";
@@ -14,7 +15,7 @@ function response(nodes: ProfileCanvasResponse["nodes"], owner = false): Profile
       { id: "avatar-bio", source: "avatar", target: "bio" },
       { id: "avatar-private", source: "avatar", target: "private" },
     ],
-    content: { posts: [], stories: [], comments: [] },
+    content: { posts: [], stories: [], comments: [], collections: [] },
     permissions: { owner, canFollow: false },
     viewport: { x: 0, y: 0, zoom: 1 },
   };
@@ -80,6 +81,7 @@ describe("profile canvas layout", () => {
         ],
         stories: [],
         comments: [],
+        collections: [],
       },
     }, { width: 900, height: 620 });
 
@@ -90,6 +92,35 @@ describe("profile canvas layout", () => {
     expect(postNodes).toHaveLength(2);
     expect(postNodes.every((node) => avatar && node.center.x > avatar.center.x)).toBe(true);
     expect(layout.edges.filter((edge) => edge.target.startsWith("post:"))).toHaveLength(0);
+  });
+
+  it("switches the right profile rail from posts to collections", () => {
+    const layout = buildProfileCanvasLayout({
+      ...response([
+        { id: "avatar", type: "avatar", position: { x: 0, y: 0 }, data: {} },
+      ]),
+      content: {
+        posts: [{ id: "post-1", text: "Post", tags: [], createdAt: "2026-07-05T00:00:00Z" }],
+        stories: [],
+        comments: [],
+        collections: [{
+          id: "collection-1",
+          ownerId: "owner",
+          title: "Saved",
+          visibility: "PUBLIC",
+          itemCount: 2,
+          previewBlocks: [],
+          updatedAt: "2026-07-05T00:00:00Z",
+        }],
+      },
+    }, { width: 900, height: 620 }, { mode: "collections" });
+
+    const collectionNodes = layout.nodes.filter((node) => node.type === "collection");
+    const avatar = layout.nodes.find((node) => node.id === "avatar");
+
+    expect(collectionNodes).toHaveLength(1);
+    expect(layout.nodes.some((node) => node.type === "post")).toBe(false);
+    expect(collectionNodes.every((node) => avatar && node.center.x > avatar.center.x)).toBe(true);
   });
 
   it("reflows profile posts horizontally when viewport height is tight", () => {
@@ -106,6 +137,7 @@ describe("profile canvas layout", () => {
         })),
         stories: [],
         comments: [],
+        collections: [],
       },
     }, { width: 720, height: 420 });
 
@@ -175,6 +207,33 @@ describe("social canvas layout", () => {
         expect(socialNodesOverlap(node, layout.userNodes[nextIndex])).toBe(false);
       }
     }
+  });
+});
+
+describe("collection canvas layout", () => {
+  it("centers the collection and places saved posts on both sides", () => {
+    const layout = buildCollectionCanvasLayout(
+      {
+        id: "collection",
+        ownerId: "owner",
+        title: "Saved",
+        visibility: "PUBLIC",
+        itemCount: 4,
+        previewBlocks: [],
+      },
+      Array.from({ length: 4 }, (_, index) => ({
+        id: `post-${index}`,
+        text: `Post ${index}`,
+        tags: [],
+      })),
+      { width: 900, height: 620 },
+    );
+    const centerX = layout.centerNode.x + layout.centerNode.width / 2;
+
+    expect(layout.initialScrollLeft).toBeGreaterThan(0);
+    expect(layout.postNodes.some((node) => node.x > centerX)).toBe(true);
+    expect(layout.postNodes.some((node) => node.x + node.width < centerX)).toBe(true);
+    expect(layout.centerNode.y + layout.centerNode.height).toBeLessThanOrEqual(layout.stage.height);
   });
 });
 

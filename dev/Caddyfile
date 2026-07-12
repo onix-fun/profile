@@ -16,6 +16,21 @@ http://profile.localhost {
 		reverse_proxy account:8081
 	}
 
+	@accountOrganizationStatic path /api/organizations /api/organizations/context /api/organizations/invitations*
+	handle @accountOrganizationStatic {
+		reverse_proxy account:8081
+	}
+
+	@accountOrganizationLookup path /api/organizations/by-name*
+	handle @accountOrganizationLookup {
+		reverse_proxy account:8081
+	}
+
+	@accountOrganizationUuid path_regexp accountOrganizationUuid ^/api/organizations/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(/.*)?$
+	handle @accountOrganizationUuid {
+		reverse_proxy account:8081
+	}
+
 	handle /graphql* {
 		reverse_proxy content-service:8080
 	}

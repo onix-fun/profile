@@ -10,7 +10,8 @@ WORKDIR /src
 COPY backend/gradlew backend/build.gradle.kts backend/settings.gradle.kts backend/gradle.properties ./
 COPY backend/gradle ./gradle
 COPY backend/src ./src
-RUN ./gradlew build -x test --no-daemon
+COPY backend/build/libs ./build/libs
+RUN if [ ! -f build/libs/*-with-dependencies.jar ]; then ./gradlew build -x test --no-daemon; fi
 
 FROM eclipse-temurin:23-jre
 WORKDIR /app

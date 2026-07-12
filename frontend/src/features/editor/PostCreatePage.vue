@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from "vue";
-import { onBeforeRouteLeave, useRouter } from "vue-router";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { onBeforeRouteLeave, RouterLink, useRouter } from "vue-router";
 import { useToast } from "primevue/usetoast";
 import { ContentService } from "@/api/contentService";
+import type { CurrentActor } from "@/api/types";
 import ContentEditor from "@/features/contentDocument/ContentEditor.vue";
 import {
   buildCreatePostInput,
@@ -18,8 +19,13 @@ const state = ref(emptyPostEditorState());
 const isPublishing = ref(false);
 const hasPublished = ref(false);
 const isDragging = ref(false);
+const currentActor = ref<CurrentActor | null>(null);
 
 const isDirty = computed(() => isPostEditorDirty(state.value));
+const activeOwner = computed(() => currentActor.value?.activeOwner || null);
+const activeOwnerName = computed(() => activeOwner.value?.displayName || activeOwner.value?.username || "User");
+const activeOwnerInitial = computed(() => activeOwnerName.value.slice(0, 1).toUpperCase());
+const activeOwnerPath = computed(() => activeOwner.value ? ownerPath(activeOwner.value.ownerType || "USER", activeOwner.value.username) : "/");
 
 function setAttachments(value: PostAttachment[]) {
   state.value.attachments = value;
@@ -42,6 +48,11 @@ function onDrop(event: DragEvent) {
 function confirmDiscard(): boolean {
   if (!isDirty.value || hasPublished.value) return true;
   return window.confirm("Discard this post?");
+}
+
+function ownerPath(ownerType: "USER" | "ORGANIZATION", username: string): string {
+  const prefix = ownerType === "ORGANIZATION" ? "o" : "u";
+  return `/${prefix}/${encodeURIComponent(username)}`;
 }
 
 async function publish() {
@@ -71,6 +82,14 @@ window.addEventListener("beforeunload", onBeforeUnload);
 
 onBeforeRouteLeave(() => confirmDiscard());
 
+onMounted(async () => {
+  try {
+    currentActor.value = await ContentService.currentActor();
+  } catch {
+    currentActor.value = null;
+  }
+});
+
 onBeforeUnmount(() => {
   window.removeEventListener("beforeunload", onBeforeUnload);
   state.value.attachments.forEach((attachment) => {
@@ -85,6 +104,15 @@ onBeforeUnmount(() => {
       <button type="button" class="icon-button" aria-label="Back" @click="confirmDiscard() && router.push('/')">
         <i class="pi pi-arrow-left"></i>
       </button>
+      <RouterLink v-if="activeOwner" class="active-owner-pill" :to="activeOwnerPath" :title="activeOwnerName">
+        <span>
+          <img v-if="activeOwner.avatarUrl" :src="activeOwner.avatarUrl" alt="" />
+          <i v-else-if="activeOwner.ownerType === 'ORGANIZATION'" class="pi pi-building"></i>
+          <strong v-else>{{ activeOwnerInitial }}</strong>
+        </span>
+        <strong>{{ activeOwnerName }}</strong>
+        <small>@{{ activeOwner.username }}</small>
+      </RouterLink>
       <label class="comments-toggle" title="Comments">
         <i class="pi pi-comments"></i>
         <input v-model="state.allowComments" type="checkbox" />
@@ -119,7 +147,7 @@ onBeforeUnmount(() => {
   width: min(980px, 100%);
   margin: 0 auto 14px;
   display: grid;
-  grid-template-columns: auto auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   justify-content: space-between;
   align-items: center;
   gap: 10px;
@@ -177,6 +205,57 @@ onBeforeUnmount(() => {
   cursor: wait;
 }
 
+.active-owner-pill {
+  min-width: 0;
+  justify-self: start;
+  height: 42px;
+  max-width: min(360px, 45vw);
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px 5px 5px;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #111827;
+  text-decoration: none;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.08);
+}
+
+.active-owner-pill span {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.active-owner-pill img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.active-owner-pill small {
+  grid-column: 2;
+  overflow: hidden;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.active-owner-pill > strong {
+  grid-column: 2;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .post-editor-grid {
   width: min(980px, 100%);
   margin: 0 auto;
@@ -197,6 +276,12 @@ onBeforeUnmount(() => {
 @media (max-width: 720px) {
   .post-editor-header {
     grid-template-columns: auto auto;
+  }
+
+  .active-owner-pill {
+    order: 3;
+    grid-column: 1 / -1;
+    max-width: 100%;
   }
 
   .comments-toggle {

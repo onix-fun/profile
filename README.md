@@ -36,7 +36,8 @@ Mailhog is exposed on `http://localhost:8027` by default; override `MAILHOG_HTTP
 
 ```env
 PROFILE_HTTP_PORT=8090
-PROFILE_ACCOUNT_API_URL=http://localhost:8089/api
+PROFILE_ACCOUNT_GRPC_URL=localhost:9097
+PROFILE_ACCOUNT_GRPC_TLS=false
 PROFILE_ACCOUNT_FRONTEND_URL=http://localhost:8089
 PROFILE_PUBLIC_URL=http://localhost:5175
 PROFILE_ALLOWED_ORIGINS=http://localhost:5175
@@ -44,7 +45,8 @@ PROFILE_CONTENT_API_URL=http://localhost:8091/internal/profile
 PROFILE_CONTENT_GRPC_URL=http://localhost:9091
 CONTENT_HTTP_PORT=8091
 CONTENT_ALLOWED_ORIGINS=http://localhost:5175
-CONTENT_ACCOUNT_API_URL=http://localhost:8089/api
+CONTENT_ACCOUNT_GRPC_URL=localhost:9097
+CONTENT_ACCOUNT_GRPC_TLS=false
 CONTENT_MEDIA_API_URL=http://localhost:8082
 CONTENT_SEARCH_API_URL=http://localhost:8083
 ```

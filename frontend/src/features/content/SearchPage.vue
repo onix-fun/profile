@@ -18,7 +18,7 @@ const sortMode = ref<SortMode>("relevance");
 const dateFilter = ref("any");
 const authorFilter = ref("");
 const tagFilter = ref("");
-const users = ref<AccountSearchUser[]>([]);
+const owners = ref<AccountSearchUser[]>([]);
 const posts = ref<FeedItem[]>([]);
 const isLoading = ref(false);
 
@@ -48,7 +48,8 @@ const filteredPosts = computed(() => {
         : null;
 
   const filtered = posts.value.filter((item) => {
-    if (author && !String(item.post.authorName || item.post.authorId || "").toLowerCase().includes(author)) return false;
+    const authorText = [item.post.author?.username, item.post.author?.displayName, item.post.authorName, item.post.authorId].filter(Boolean).join(" ").toLowerCase();
+    if (author && !authorText.includes(author)) return false;
     if (maxAgeMs && item.post.createdAt && now - Date.parse(item.post.createdAt) > maxAgeMs) return false;
     return true;
   });
@@ -67,11 +68,11 @@ async function search() {
   if (!text && !tagFilter.value.trim()) return;
   isLoading.value = true;
   try {
-    const [nextUsers, nextPosts] = await Promise.all([
-      text.length >= 2 ? ProfileService.searchUsers(text, 12) : Promise.resolve([]),
+    const [nextOwners, nextPosts] = await Promise.all([
+      text.length >= 2 ? ProfileService.searchOwners(text, 12) : Promise.resolve([]),
       ContentService.feed(tagQueries.value, 32),
     ]);
-    users.value = nextUsers;
+    owners.value = nextOwners;
     posts.value = nextPosts;
   } catch (error) {
     toast.add({ severity: "error", summary: "Search", detail: error instanceof Error ? error.message : "Unable to search", life: 5000 });
@@ -80,8 +81,9 @@ async function search() {
   }
 }
 
-function openUser(user: AccountSearchUser) {
-  void router.push(`/u/${encodeURIComponent(user.username)}`);
+function openOwner(owner: AccountSearchUser) {
+  const prefix = owner.ownerType === "ORGANIZATION" ? "o" : "u";
+  void router.push(`/${prefix}/${encodeURIComponent(owner.username)}`);
 }
 
 function openPost(item: FeedItem) {
@@ -93,7 +95,7 @@ function userName(user: AccountSearchUser): string {
 }
 
 function fullName(user: AccountSearchUser): string {
-  return [user.firstName, user.lastName].filter(Boolean).join(" ");
+  return user.displayName || [user.firstName, user.lastName].filter(Boolean).join(" ");
 }
 </script>
 
@@ -150,18 +152,19 @@ function fullName(user: AccountSearchUser): string {
 
       <section v-if="!isLoading && (activeTab === 'all' || activeTab === 'users')" class="result-section">
         <header>
-          <strong>Users</strong>
-          <span>{{ users.length }}</span>
+          <strong>Accounts</strong>
+          <span>{{ owners.length }}</span>
         </header>
-        <button v-for="user in users" :key="user.username" type="button" class="user-result" @click="openUser(user)">
+        <button v-for="user in owners" :key="`${user.ownerType || 'USER'}:${user.id}`" type="button" class="user-result" @click="openOwner(user)">
           <span class="user-avatar">
             <img v-if="user.avatarUrl" :src="user.avatarUrl" alt="" />
-            <i v-else class="pi pi-user"></i>
+            <i v-else :class="user.ownerType === 'ORGANIZATION' ? 'pi pi-building' : 'pi pi-user'"></i>
           </span>
           <span>
             <strong>{{ userName(user) }}</strong>
             <small v-if="fullName(user)">{{ fullName(user) }}</small>
           </span>
+          <small v-if="user.ownerType === 'ORGANIZATION'" class="owner-badge">Organization</small>
         </button>
       </section>
 
@@ -348,6 +351,16 @@ function fullName(user: AccountSearchUser): string {
 .user-result small {
   color: var(--muted);
   font-weight: 700;
+}
+
+.owner-badge {
+  margin-left: auto;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #ecfeff;
+  color: #0f766e !important;
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 .result-row {

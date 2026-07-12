@@ -22,13 +22,14 @@ object CanvasMapper {
     fun toCanvas(
         profile: AccountProfile,
         currentUser: SessionUser,
-        content: ProfileContentSummary = ProfileContentSummary()
+        content: ProfileContentSummary = ProfileContentSummary(),
+        activeOwner: AccountUser = currentUser.toActiveOwner()
     ): ProfileCanvasResponse {
         if (profile.relationship.isBlocked) {
             return ProfileCanvasResponse(status = "BLOCKED", relationship = profile.relationship)
         }
 
-        val owner = profile.id == currentUser.id
+        val owner = profile.ownerType == activeOwner.ownerType && profile.id == activeOwner.id
         if (profile.isPrivate && !owner && !profile.relationship.isFollowing && !profile.relationship.isFriend) {
             return ProfileCanvasResponse(
                 status = "PRIVATE",
@@ -89,9 +90,9 @@ object CanvasMapper {
     }
 
     private fun dataFor(id: String, profile: AccountProfile, content: ProfileContentSummary): JsonObject {
-        val displayName = listOfNotNull(profile.firstName, profile.lastName)
+        val displayName = (profile.displayName ?: listOfNotNull(profile.firstName, profile.lastName)
             .joinToString(" ")
-            .ifBlank { profile.username }
+            .ifBlank { profile.username })
         return when (id) {
             "avatar" -> JsonObject(mapOf(
                 "avatarUrl" to JsonPrimitive(profile.avatarUrl),
@@ -119,4 +120,14 @@ object CanvasMapper {
         relationship.hasPendingRequest -> "Requested"
         else -> "Follow"
     }
+
+    private fun SessionUser.toActiveOwner(): AccountUser =
+        AccountUser(
+            id = id,
+            ownerType = "USER",
+            username = username,
+            firstName = firstName,
+            lastName = lastName,
+            avatarUrl = avatarUrl
+        )
 }

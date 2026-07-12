@@ -36,13 +36,19 @@ private fun browserCookieName(name: String): String {
 
 With `ACCOUNT_HTTP_COOKIE_DOMAIN=.onix.fun`, Profile Service will receive `access_token` and forward it to Account API as `Authorization: Bearer <token>`.
 
-## Required Account Internal Visibility API
+## Required Account Internal gRPC API
 
-Content Service treats Account as the trusted source for privacy, follows, blocks, and close-friends membership. The local dev sync applies `dev/account-patches/0002-internal-visibility-api.patch`, which adds:
+Content and Profile treat Account as the trusted source for identity, privacy, follows, blocks, close-friends membership, and notification preferences. Backend-to-backend Account calls must use Account gRPC, not REST.
 
-```http
-GET /api/internal/visibility?ownerId=<uuid>&viewerId=<uuid>
-Authorization: Bearer <viewer access token>
+Local development uses plaintext gRPC:
+
+```env
+ACCOUNT_GRPC_ENABLED=true
+ACCOUNT_GRPC_PORT=9097
+PROFILE_ACCOUNT_GRPC_URL=account:9097
+PROFILE_ACCOUNT_GRPC_TLS=false
+CONTENT_ACCOUNT_GRPC_URL=account:9097
+CONTENT_ACCOUNT_GRPC_TLS=false
 ```
 
-The response includes `ownerId`, `viewerId`, `isPrivate`, `relationship`, `isBlocked`, and `isCloseFriend`. Content uses this response before exposing profile posts or stories to Profile Service.
+Production should enable mTLS with Account server certificate, client CA, and SAN allowlist. User-bound gRPC calls forward the Account access token in `authorization: Bearer <token>` metadata so Account validates the JWT and active session itself.

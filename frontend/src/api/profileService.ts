@@ -12,13 +12,18 @@ export class ProfileService {
     return response.data;
   }
 
-  static async follow(userId: string): Promise<Relationship> {
-    const response = await api.post<{ relationship: Relationship }>(`/profiles/${userId}/follow`);
+  static async getOrganization(orgName: string): Promise<ProfileCanvasResponse> {
+    const response = await api.get<ProfileCanvasResponse>(`/organizations/${encodeURIComponent(orgName)}`);
+    return response.data;
+  }
+
+  static async follow(ownerId: string, ownerType: "USER" | "ORGANIZATION" = "USER"): Promise<Relationship> {
+    const response = await api.post<{ relationship: Relationship }>(`/owners/${ownerType}/${ownerId}/follow`);
     return response.data.relationship;
   }
 
-  static async unfollow(userId: string): Promise<void> {
-    await api.delete(`/profiles/${userId}/follow`);
+  static async unfollow(ownerId: string, ownerType: "USER" | "ORGANIZATION" = "USER"): Promise<void> {
+    await api.delete(`/owners/${ownerType}/${ownerId}/follow`);
   }
 
   static async searchUsers(query: string, limit = 10): Promise<AccountSearchUser[]> {
@@ -28,8 +33,22 @@ export class ProfileService {
     return response.data;
   }
 
+  static async searchOwners(query: string, limit = 10): Promise<AccountSearchUser[]> {
+    const response = await api.get<AccountSearchUser[]>("/profile-search/owners", {
+      params: { q: query, limit },
+    });
+    return response.data;
+  }
+
   static async getSocial(nickname: string, filter: SocialFilter = "friends", page = 1, limit = 60): Promise<SocialCanvasResponse> {
     const response = await api.get<SocialCanvasResponse>(`/profiles/${encodeURIComponent(nickname)}/social`, {
+      params: { filter, page, limit },
+    });
+    return response.data;
+  }
+
+  static async getOrganizationSocial(orgName: string, filter: SocialFilter = "friends", page = 1, limit = 60): Promise<SocialCanvasResponse> {
+    const response = await api.get<SocialCanvasResponse>(`/organizations/${encodeURIComponent(orgName)}/social`, {
       params: { filter, page, limit },
     });
     return response.data;

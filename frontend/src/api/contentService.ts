@@ -1,15 +1,21 @@
 import axios from "axios";
+import { ensureActiveOwnerSession } from "@/api/activeOwnerSession";
 import { refreshBrowserSession } from "@/api/client";
 import { redirectToAccount } from "@/api/authRedirect";
 import type {
   CommentItem,
   CommentReactionState,
   ContentBlock,
+  CollectionDetail,
+  CreateCollectionInput,
   CreatePostInput,
   CreateStoryInput,
+  CurrentActor,
   FeedItem,
+  PostCollectionsState,
   RecommendationFeedInput,
   RecommendationFeedResponse,
+  SavedCollection,
   PostReactionState,
   Story,
   StoryArchiveResponse,
@@ -25,8 +31,9 @@ const graphql = axios.create({
   withCredentials: true,
 });
 
-graphql.interceptors.request.use((config) => {
+graphql.interceptors.request.use(async (config) => {
   config.headers.set("X-Profile-Redirect", window.location.href);
+  await ensureActiveOwnerSession();
   return config;
 });
 
@@ -98,6 +105,11 @@ async function multipartRequest<T>(
 }
 
 export class ContentService {
+  static async currentActor(): Promise<CurrentActor> {
+    const data = await request<{ currentActor: CurrentActor }>("currentActor");
+    return data.currentActor;
+  }
+
   static async recommendationFeed(input: RecommendationFeedInput): Promise<RecommendationFeedResponse> {
     const data = await request<{ recommendationFeed: RecommendationFeedResponse }>("recommendationFeed", { input });
     return data.recommendationFeed;
@@ -106,6 +118,33 @@ export class ContentService {
   static async feed(tags: string[] = [], limit = 30): Promise<FeedItem[]> {
     const data = await request<{ feed: FeedItem[] }>("feed", { tags, limit });
     return data.feed;
+  }
+
+  static async collections(ownerId: string, ownerType: "USER" | "ORGANIZATION" = "USER", limit = 80): Promise<SavedCollection[]> {
+    const data = await request<{ collections: SavedCollection[] }>("collections", { ownerId, ownerType, limit });
+    return data.collections;
+  }
+
+  static async collection(id: string, limit = 200): Promise<CollectionDetail> {
+    const data = await request<{ collection: CollectionDetail }>("collection", { id, limit });
+    return data.collection;
+  }
+
+  static async createCollection(input: CreateCollectionInput): Promise<SavedCollection> {
+    const data = await request<{ createCollection: SavedCollection }>("createCollection", { input });
+    return data.createCollection;
+  }
+
+  static async postCollections(postId: string): Promise<PostCollectionsState> {
+    const data = await request<{ postCollections: PostCollectionsState }>("postCollections", { postId });
+    return data.postCollections;
+  }
+
+  static async setPostCollections(postId: string, collectionIds: string[]): Promise<PostCollectionsState> {
+    const data = await request<{ setPostCollections: PostCollectionsState }>("setPostCollections", {
+      input: { postId, collectionIds },
+    });
+    return data.setPostCollections;
   }
 
   static async createPost(input: CreatePostInput, files: File[] = []): Promise<FeedItem["post"]> {
@@ -163,13 +202,13 @@ export class ContentService {
     return data.story;
   }
 
-  static async storyGroup(authorId: string, startStoryId?: string, archive = false): Promise<StoryGroup> {
-    const data = await request<{ storyGroup: StoryGroup }>("storyGroup", { authorId, startStoryId, archive });
+  static async storyGroup(authorId: string, startStoryId?: string, archive = false, ownerType: "USER" | "ORGANIZATION" = "USER"): Promise<StoryGroup> {
+    const data = await request<{ storyGroup: StoryGroup }>("storyGroup", { authorId, ownerType, startStoryId, archive });
     return data.storyGroup;
   }
 
-  static async storyArchive(ownerId: string, cursor?: string | null, limit = 40): Promise<StoryArchiveResponse> {
-    const data = await request<{ storyArchive: StoryArchiveResponse }>("storyArchive", { ownerId, cursor, limit });
+  static async storyArchive(ownerId: string, cursor?: string | null, limit = 40, ownerType: "USER" | "ORGANIZATION" = "USER"): Promise<StoryArchiveResponse> {
+    const data = await request<{ storyArchive: StoryArchiveResponse }>("storyArchive", { ownerId, ownerType, cursor, limit });
     return data.storyArchive;
   }
 

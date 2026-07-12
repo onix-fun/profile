@@ -26,7 +26,19 @@ enum class Visibility { PUBLIC, CLOSE_FRIENDS }
 enum class ContentStatus { ACTIVE, ARCHIVED, DELETED }
 
 @Serializable
+enum class CollectionVisibility { PUBLIC, PRIVATE }
+
+@Serializable
 enum class ContentBlockType { TEXT, IMAGE, VIDEO, AUDIO, FILE }
+
+@Serializable
+enum class OwnerType { USER, ORGANIZATION }
+
+@Serializable
+data class OwnerRef(
+    val ownerType: OwnerType = OwnerType.USER,
+    val ownerId: String
+)
 
 @Serializable
 data class SessionUser(
@@ -38,12 +50,22 @@ data class SessionUser(
 )
 
 @Serializable
-data class AccountUser(
+data class AccountOwner(
     val id: String,
+    val ownerType: OwnerType = OwnerType.USER,
     val username: String,
+    val displayName: String? = null,
     val firstName: String? = null,
     val lastName: String? = null,
     val avatarUrl: String? = null
+)
+
+typealias AccountUser = AccountOwner
+
+@Serializable
+data class CurrentActor(
+    val user: SessionUser,
+    val activeOwner: AccountOwner
 )
 
 @Serializable
@@ -58,7 +80,9 @@ data class AccountRelationship(
 @Serializable
 data class AccountVisibility(
     val ownerId: String,
+    val ownerType: OwnerType = OwnerType.USER,
     val viewerId: String?,
+    val viewerType: OwnerType = OwnerType.USER,
     val isPrivate: Boolean = false,
     val relationship: AccountRelationship = AccountRelationship(),
     val isBlocked: Boolean = false,
@@ -86,6 +110,8 @@ data class ContentBlock(
 data class Post(
     val id: String = UUID.randomUUID().toString(),
     val authorId: String,
+    val ownerType: OwnerType = OwnerType.USER,
+    val ownerId: String = authorId,
     val author: AccountUser? = null,
     val title: String? = null,
     val text: String = "",
@@ -106,6 +132,8 @@ data class Post(
 data class Story(
     val id: String = UUID.randomUUID().toString(),
     val authorId: String,
+    val ownerType: OwnerType = OwnerType.USER,
+    val ownerId: String = authorId,
     val author: AccountUser? = null,
     val blocks: List<ContentBlock> = emptyList(),
     val visibility: Visibility = Visibility.PUBLIC,
@@ -128,6 +156,8 @@ data class Comment(
     val id: String = UUID.randomUUID().toString(),
     val postId: String,
     val authorId: String,
+    val ownerType: OwnerType = OwnerType.USER,
+    val ownerId: String = authorId,
     val author: AccountUser? = null,
     val parentId: String? = null,
     val text: String,
@@ -207,12 +237,15 @@ data class CommentReactionState(
 data class ProfileContentResponse(
     val posts: List<Post> = emptyList(),
     val stories: List<Story> = emptyList(),
-    val comments: List<Comment> = emptyList()
+    val comments: List<Comment> = emptyList(),
+    val collections: List<SavedCollection> = emptyList()
 )
 
 @Serializable
 data class StoryRailItem(
     val authorId: String,
+    val ownerType: OwnerType = OwnerType.USER,
+    val ownerId: String = authorId,
     val authorName: String,
     val author: AccountUser? = null,
     val avatarUrl: String? = null,
@@ -230,6 +263,8 @@ data class StoryRailItem(
 @Serializable
 data class StoryGroup(
     val authorId: String,
+    val ownerType: OwnerType = OwnerType.USER,
+    val ownerId: String = authorId,
     val authorName: String,
     val author: AccountUser? = null,
     val avatarUrl: String? = null,
@@ -241,10 +276,63 @@ data class StoryGroup(
 @Serializable
 data class StoryArchiveResponse(
     val ownerId: String,
+    val ownerType: OwnerType = OwnerType.USER,
     val owner: AccountUser? = null,
     val stories: List<Story> = emptyList(),
     val cursor: String? = null,
     val nextCursor: String? = null
+)
+
+@Serializable
+data class SavedCollection(
+    val id: String = UUID.randomUUID().toString(),
+    val ownerType: OwnerType = OwnerType.USER,
+    val ownerId: String,
+    val title: String,
+    val description: String? = null,
+    val cover: JsonObject? = null,
+    val visibility: CollectionVisibility = CollectionVisibility.PRIVATE,
+    val itemCount: Int = 0,
+    val previewBlocks: List<ContentBlock> = emptyList(),
+    @Serializable(with = InstantIsoSerializer::class)
+    val createdAt: Instant = Instant.now(),
+    @Serializable(with = InstantIsoSerializer::class)
+    val updatedAt: Instant = createdAt
+)
+
+@Serializable
+data class CollectionDetail(
+    val collection: SavedCollection,
+    val posts: List<Post> = emptyList()
+)
+
+@Serializable
+data class CreateCollectionInput(
+    val title: String,
+    val description: String? = null,
+    val cover: JsonObject? = null,
+    val visibility: CollectionVisibility = CollectionVisibility.PRIVATE
+)
+
+@Serializable
+data class UpdateCollectionInput(
+    val id: String,
+    val title: String? = null,
+    val description: String? = null,
+    val cover: JsonObject? = null,
+    val visibility: CollectionVisibility? = null
+)
+
+@Serializable
+data class SetPostCollectionsInput(
+    val postId: String,
+    val collectionIds: List<String> = emptyList()
+)
+
+@Serializable
+data class PostCollectionsState(
+    val postId: String,
+    val collectionIds: List<String> = emptyList()
 )
 
 @Serializable

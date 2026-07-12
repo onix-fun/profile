@@ -23,7 +23,9 @@ const activeDayIndex = ref(0);
 const isTransitioning = ref(false);
 let wheelLock = false;
 
-const nickname = computed(() => String(route.params.nickname || ""));
+const isOrganizationRoute = computed(() => route.name === "OrganizationStoryArchive");
+const nickname = computed(() => String(route.params.nickname || route.params.orgname || ""));
+const ownerType = computed<"USER" | "ORGANIZATION">(() => isOrganizationRoute.value ? "ORGANIZATION" : "USER");
 const ownerName = computed(() => displayUsername(profile.value?.username, "Profile"));
 const dayGroups = computed<DayGroup[]>(() => {
   const groups = new Map<string, Story[]>();
@@ -61,11 +63,13 @@ async function loadArchive(cursor?: string | null) {
   isLoading.value = true;
   try {
     if (!profile.value) {
-      const response = await ProfileService.getProfile(nickname.value);
+      const response = isOrganizationRoute.value
+        ? await ProfileService.getOrganization(nickname.value)
+        : await ProfileService.getProfile(nickname.value);
       profile.value = response.profile || null;
     }
     if (!profile.value) return;
-    const archive = await ContentService.storyArchive(profile.value.id, cursor, 80);
+    const archive = await ContentService.storyArchive(profile.value.id, cursor, 80, profile.value.ownerType || ownerType.value);
     stories.value = cursor ? [...stories.value, ...archive.stories] : archive.stories;
     nextCursor.value = archive.nextCursor || null;
     activeDayIndex.value = clamp(activeDayIndex.value, 0, Math.max(0, dayGroups.value.length - 1));
@@ -79,6 +83,7 @@ function openStory(story: Story) {
     path: `/story/${encodeURIComponent(story.id)}`,
     query: {
       author: story.authorId,
+      ownerType: story.ownerType || profile.value?.ownerType || ownerType.value,
       archive: "1",
       from: route.fullPath,
     },
@@ -86,7 +91,7 @@ function openStory(story: Story) {
 }
 
 function close() {
-  void router.push(`/u/${encodeURIComponent(nickname.value)}`);
+  void router.push(`/${isOrganizationRoute.value ? "o" : "u"}/${encodeURIComponent(nickname.value)}`);
 }
 
 function firstMedia(story: Story): StoryBlock | undefined {
@@ -221,8 +226,9 @@ function clamp(value: number, min: number, max: number): number {
   inset: 0;
   overflow: hidden;
   background:
-    radial-gradient(circle at 22% 18%, rgba(34, 197, 94, 0.18), transparent 28%),
-    radial-gradient(circle at 78% 22%, rgba(99, 102, 241, 0.16), transparent 30%),
+    radial-gradient(circle at 22% 18%, rgba(45, 212, 191, 0.18), transparent 28%),
+    radial-gradient(circle at 78% 22%, rgba(129, 140, 248, 0.16), transparent 30%),
+    radial-gradient(circle at 52% 82%, rgba(34, 197, 94, 0.12), transparent 28%),
     #06080d;
   color: #ffffff;
   perspective: 1200px;
@@ -363,7 +369,7 @@ function clamp(value: number, min: number, max: number): number {
   height: 100%;
   display: flex;
   align-items: center;
-  gap: 24px;
+  gap: 30px;
   overflow-x: auto;
   overflow-y: hidden;
   padding: 94px max(28px, 8vw) 112px;
@@ -379,26 +385,63 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 .archive-card {
-  width: 178px;
-  min-width: 178px;
+  width: 188px;
+  min-width: 188px;
   display: grid;
-  gap: 10px;
+  justify-items: center;
+  gap: 12px;
   padding: 0;
   background: transparent;
-  text-align: left;
+  text-align: center;
   scroll-snap-align: center;
+  transition: transform 180ms ease, filter 180ms ease;
+}
+
+.archive-card:hover,
+.archive-card:focus-visible {
+  transform: translateY(-4px) scale(1.02);
 }
 
 .archive-preview {
+  position: relative;
   width: 178px;
-  aspect-ratio: 9 / 14;
+  aspect-ratio: 1;
   display: grid;
   place-items: center;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.08);
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.32);
+  border: 7px solid transparent;
+  border-radius: 999px;
+  background:
+    linear-gradient(#101827, #101827) padding-box,
+    conic-gradient(from 210deg, #22d3ee, #818cf8 42%, #22c55e 74%, #22d3ee) border-box;
+  box-shadow:
+    0 28px 88px rgba(0, 0, 0, 0.34),
+    0 0 34px rgba(45, 212, 191, 0.18);
+}
+
+.archive-preview::before,
+.archive-preview::after {
+  content: "";
+  position: absolute;
+  z-index: 2;
+  border-radius: 999px;
+  pointer-events: none;
+}
+
+.archive-preview::before {
+  inset: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.archive-preview::after {
+  right: 12%;
+  bottom: 9%;
+  width: 12px;
+  height: 12px;
+  background: #ffffff;
+  box-shadow:
+    -112px -126px 0 -3px rgba(34, 211, 238, 0.72),
+    30px -118px 0 -4px rgba(34, 197, 94, 0.72);
 }
 
 .archive-preview img,
@@ -409,6 +452,7 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 .archive-card strong {
+  width: 100%;
   overflow: hidden;
   font-size: 13px;
   font-weight: 900;
@@ -421,9 +465,19 @@ function clamp(value: number, min: number, max: number): number {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.1);
   color: rgba(255, 255, 255, 0.66);
   font-size: 11px;
   font-weight: 800;
+  backdrop-filter: blur(14px);
+}
+
+.archive-card--close .archive-preview {
+  background:
+    linear-gradient(#101827, #101827) padding-box,
+    conic-gradient(from 220deg, #22c55e, #86efac 45%, #22d3ee 76%, #22c55e) border-box;
 }
 
 .archive-card--close small i {
@@ -464,14 +518,18 @@ function clamp(value: number, min: number, max: number): number {
   align-items: end;
   gap: 10px;
   overflow-x: auto;
-  padding: 14px 18px;
+  border-radius: 999px;
+  padding: 12px 16px;
+  background: rgba(9, 13, 20, 0.42);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(18px);
   transform: translateX(-50%);
 }
 
 .archive-tick {
   position: relative;
-  width: 10px;
-  height: 32px;
+  width: 12px;
+  height: 34px;
   border: 0;
   border-radius: 999px;
   background: transparent;
@@ -483,19 +541,20 @@ function clamp(value: number, min: number, max: number): number {
   position: absolute;
   left: 50%;
   bottom: 0;
-  width: 2px;
-  height: 22px;
+  width: 8px;
+  height: 8px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.58);
+  background: rgba(255, 255, 255, 0.42);
   transform: translateX(-50%);
-  transition: height 160ms ease, background 160ms ease;
+  transition: height 160ms ease, background 160ms ease, box-shadow 160ms ease;
 }
 
 .archive-tick.is-active::before,
 .archive-tick:hover::before,
 .archive-tick:focus-visible::before {
-  height: 32px;
+  height: 28px;
   background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 0 18px rgba(45, 212, 191, 0.42);
 }
 
 .archive-tick::after {

@@ -1,19 +1,28 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
-import { ProfileService } from "@/api/profileService";
-import type { SessionUser } from "@/api/types";
+import { ContentService } from "@/api/contentService";
+import type { AccountUser, CurrentActor } from "@/api/types";
 import { runtimeConfig } from "@/runtime-config";
 import { accountSettingsUrl } from "@/features/profile/accountLinks";
 
 const router = useRouter();
 const route = useRoute();
-const user = ref<SessionUser | null>(null);
+const actor = ref<CurrentActor | null>(null);
 const menuOpen = ref(false);
 
+const activeOwner = computed<AccountUser | null>(() => actor.value?.activeOwner || null);
+const isOrg = computed(() => activeOwner.value?.ownerType === "ORGANIZATION");
 const initials = computed(() => {
-  const source = user.value?.firstName || user.value?.username || "U";
+  const source = activeOwner.value?.displayName || activeOwner.value?.username || "U";
   return source.slice(0, 1).toUpperCase();
+});
+const ownerName = computed(() => activeOwner.value?.displayName || activeOwner.value?.username || "Account");
+const profilePath = computed(() => {
+  const owner = activeOwner.value;
+  if (!owner) return "/u/me";
+  const prefix = owner.ownerType === "ORGANIZATION" ? "o" : "u";
+  return `/${prefix}/${encodeURIComponent(owner.username)}`;
 });
 const controlsHidden = computed(() => (
   route.name === "CreatePost"
@@ -31,9 +40,9 @@ const settingsHref = computed(() => accountSettingsUrl(runtimeConfig.accountFron
 
 onMounted(async () => {
   try {
-    user.value = await ProfileService.session();
+    actor.value = await ContentService.currentActor();
   } catch {
-    user.value = null;
+    actor.value = null;
   }
 });
 
@@ -63,12 +72,14 @@ function openCreateStory() {
     <button
       v-if="!controlsHidden"
       class="avatar-menu-button"
+      :class="{ 'avatar-menu-button--org': isOrg }"
       type="button"
       aria-label="Open menu"
       :aria-expanded="menuOpen"
       @click="menuOpen = !menuOpen"
     >
-      <img v-if="user?.avatarUrl" :src="user.avatarUrl" alt="" />
+      <img v-if="activeOwner?.avatarUrl" :src="activeOwner.avatarUrl" alt="" />
+      <i v-else-if="isOrg" class="pi pi-building"></i>
       <span v-else>{{ initials }}</span>
       <i class="pi pi-bars"></i>
     </button>
@@ -77,18 +88,19 @@ function openCreateStory() {
       <aside v-if="menuOpen && !controlsHidden" class="account-menu" aria-label="Account menu">
         <div class="account-menu__identity">
           <div class="account-menu__avatar">
-            <img v-if="user?.avatarUrl" :src="user.avatarUrl" alt="" />
+            <img v-if="activeOwner?.avatarUrl" :src="activeOwner.avatarUrl" alt="" />
+            <i v-else-if="isOrg" class="pi pi-building"></i>
             <span v-else>{{ initials }}</span>
           </div>
           <div>
-            <strong>{{ user?.firstName || user?.username || "Account" }}</strong>
-            <span>@{{ user?.username }}</span>
+            <strong>{{ ownerName }}</strong>
+            <span>@{{ activeOwner?.username }}</span>
           </div>
         </div>
 
         <nav class="account-menu__nav">
           <RouterLink to="/" @click="closeMenu"><i class="pi pi-home"></i>Feed</RouterLink>
-          <RouterLink to="/u/me" @click="closeMenu"><i class="pi pi-user"></i>Profile</RouterLink>
+          <RouterLink :to="profilePath" @click="closeMenu"><i :class="isOrg ? 'pi pi-building' : 'pi pi-user'"></i>Profile</RouterLink>
           <RouterLink to="/search" @click="closeMenu"><i class="pi pi-search"></i>Search</RouterLink>
           <button type="button" @click="openCreatePost"><i class="pi pi-plus-circle"></i>Create post</button>
           <button type="button" @click="openCreateStory"><i class="pi pi-stopwatch"></i>Create story</button>
@@ -161,6 +173,7 @@ function openCreateStory() {
 }
 
 .avatar-menu-button img,
+.avatar-menu-button > i,
 .avatar-menu-button > span {
   width: 100%;
   height: 100%;
@@ -169,6 +182,11 @@ function openCreateStory() {
   border-radius: inherit;
   object-fit: cover;
   font-weight: 900;
+}
+
+.avatar-menu-button--org {
+  border-color: #818cf8;
+  box-shadow: 0 14px 34px rgba(129, 140, 248, 0.2);
 }
 
 .avatar-menu-button i {
@@ -219,9 +237,12 @@ function openCreateStory() {
   overflow: hidden;
 }
 
-.account-menu__avatar img {
+.account-menu__avatar img,
+.account-menu__avatar i {
   width: 100%;
   height: 100%;
+  display: grid;
+  place-items: center;
   object-fit: cover;
 }
 

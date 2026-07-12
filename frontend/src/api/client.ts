@@ -1,4 +1,5 @@
 import axios from "axios";
+import { ensureActiveOwnerSession } from "@/api/activeOwnerSession";
 import { runtimeConfig } from "@/runtime-config";
 import { redirectToAccount } from "@/api/authRedirect";
 
@@ -25,8 +26,9 @@ export async function refreshBrowserSession(): Promise<void> {
   return sessionRefreshRequest;
 }
 
-api.interceptors.request.use((config) => {
+api.interceptors.request.use(async (config) => {
   config.headers.set("X-Profile-Redirect", window.location.href);
+  if (!shouldSkipActiveOwnerSync(config.url)) await ensureActiveOwnerSession();
   return config;
 });
 
@@ -61,4 +63,11 @@ export function apiErrorMessage(error: unknown): string {
     return error.response?.data?.message || error.response?.data?.code || error.message;
   }
   return "Unexpected error";
+}
+
+function shouldSkipActiveOwnerSync(url?: string): boolean {
+  if (!url) return false;
+  return url.startsWith("/auth/")
+    || url === "/session/me"
+    || url.startsWith("/organizations/context");
 }

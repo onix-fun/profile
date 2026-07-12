@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
-import { useRouter } from "vue-router";
+import { RouterLink, useRouter } from "vue-router";
 import { useToast } from "primevue/usetoast";
 import { ContentService } from "@/api/contentService";
-import type { CanvasPostNode, RecommendationFeedResponse } from "@/api/types";
+import type { CanvasPostNode, CurrentActor, RecommendationFeedResponse } from "@/api/types";
 import {
   FEED_CHUNK_LIMIT,
   buildRecommendationCanvasNodes,
@@ -14,6 +14,7 @@ import {
   type FeedCamera,
 } from "@/features/content/feedCanvasLayout";
 import PostCloudNode from "@/features/content/PostCloudNode.vue";
+import SaveToCollectionsPopover from "@/features/content/SaveToCollectionsPopover.vue";
 import StoryRail from "@/features/stories/StoryRail.vue";
 
 const viewport = ref<HTMLElement | null>(null);
@@ -22,6 +23,8 @@ const toast = useToast();
 const camera = ref<FeedCamera>({ x: 0, y: 0 });
 const viewportSize = ref({ width: 1024, height: 720 });
 const chunks = ref<Record<string, RecommendationFeedResponse>>({});
+const currentActor = ref<CurrentActor | null>(null);
+const savingPostId = ref<string | null>(null);
 const pendingCount = ref(0);
 const loadError = ref("");
 const isDragging = ref(false);
@@ -47,11 +50,16 @@ const visibleNodes = computed(() => nodes.value.map((node) => {
   };
 }));
 const isLoading = computed(() => pendingCount.value > 0 && nodes.value.length === 0);
+const activeOwner = computed(() => currentActor.value?.activeOwner || null);
+const activeOwnerName = computed(() => activeOwner.value?.displayName || activeOwner.value?.username || "User");
+const activeOwnerInitial = computed(() => activeOwnerName.value.slice(0, 1).toUpperCase());
+const activeOwnerPath = computed(() => activeOwner.value ? ownerPath(activeOwner.value.ownerType || "USER", activeOwner.value.username) : "/");
 const gridStyle = computed(() => ({
   backgroundPosition: `${viewportSize.value.width / 2 - camera.value.x}px ${viewportSize.value.height / 2 - camera.value.y}px`,
 }));
 
 onMounted(async () => {
+  void loadCurrentActor();
   restoreCamera();
   await nextTick();
   updateViewportSize();
@@ -81,6 +89,10 @@ function updateViewportSize() {
 function openPost(node: CanvasPostNode) {
   rememberCamera();
   void router.push(`/p/${encodeURIComponent(node.id)}`);
+}
+
+function openSave(node: CanvasPostNode) {
+  savingPostId.value = node.id;
 }
 
 async function toggleLike(node: CanvasPostNode) {
@@ -199,10 +211,35 @@ async function loadChunk(chunkX: number, chunkY: number) {
     pendingCount.value = Math.max(0, pendingCount.value - 1);
   }
 }
+
+async function loadCurrentActor() {
+  try {
+    currentActor.value = await ContentService.currentActor();
+  } catch {
+    currentActor.value = null;
+  }
+}
+
+function ownerPath(ownerType: "USER" | "ORGANIZATION", username: string): string {
+  const prefix = ownerType === "ORGANIZATION" ? "o" : "u";
+  return `/${prefix}/${encodeURIComponent(username)}`;
+}
 </script>
 
 <template>
   <section class="feed-shell" aria-label="Canvas feed">
+    <RouterLink v-if="activeOwner" class="active-owner-chip" :to="activeOwnerPath" :title="activeOwnerName">
+      <span class="active-owner-avatar">
+        <img v-if="activeOwner.avatarUrl" :src="activeOwner.avatarUrl" alt="" />
+        <i v-else-if="activeOwner.ownerType === 'ORGANIZATION'" class="pi pi-building"></i>
+        <strong v-else>{{ activeOwnerInitial }}</strong>
+      </span>
+      <span class="active-owner-copy">
+        <strong>{{ activeOwnerName }}</strong>
+        <small>@{{ activeOwner.username }}</small>
+      </span>
+    </RouterLink>
+
     <StoryRail />
 
     <div
@@ -233,8 +270,15 @@ async function loadChunk(chunkX: number, chunkY: number) {
         @open="openPost(node)"
         @comments="openPost(node)"
         @like="toggleLike(node)"
+        @bookmark="openSave(node)"
       />
     </div>
+
+    <SaveToCollectionsPopover
+      v-if="savingPostId"
+      :post-id="savingPostId"
+      @close="savingPostId = null"
+    />
 
     <div v-if="isLoading" class="feed-state">Loading feed</div>
     <div v-else-if="loadError && nodes.length === 0" class="feed-state feed-state-panel">
@@ -308,6 +352,72 @@ async function loadChunk(chunkX: number, chunkY: number) {
 .canvas-post {
   position: absolute;
   z-index: 2;
+}
+
+.active-owner-chip {
+  position: fixed;
+  z-index: 9;
+  top: max(14px, env(safe-area-inset-top));
+  left: 50%;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 8px 11px 8px 8px;
+  border: 1px solid rgba(15, 23, 42, 0.09);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.88);
+  color: #111827;
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.13);
+  backdrop-filter: blur(18px);
+  transform: translateX(-50%);
+  text-decoration: none;
+  pointer-events: auto;
+}
+
+.active-owner-avatar {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #0f172a;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.active-owner-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.active-owner-copy {
+  min-width: 0;
+  display: grid;
+  line-height: 1.1;
+}
+
+.active-owner-copy small {
+  overflow: hidden;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.active-owner-copy strong {
+  overflow: hidden;
+  max-width: 170px;
+  font-size: 13px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .feed-state {

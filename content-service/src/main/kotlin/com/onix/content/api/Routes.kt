@@ -23,6 +23,8 @@ import io.ktor.server.websocket.*
 import io.ktor.websocket.close
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
+import com.unlim.profile.grpc.v1.UserActivityType
+import com.unlim.profile.grpc.v1.OwnerAction
 import java.time.Duration
 import java.time.Instant
 
@@ -73,7 +75,7 @@ fun Application.registerRoutes(config: AppConfig, account: AccountClient, media:
             call.respond(
                 mapOf(
                     "status" to "UP",
-                    "accountApi" to config.accountBaseUrl,
+                    "accountGrpc" to config.accountGrpcUrl,
                     "mediaApi" to config.mediaBaseUrl,
                     "searchApi" to config.searchBaseUrl
                 )
@@ -96,16 +98,39 @@ fun Application.registerRoutes(config: AppConfig, account: AccountClient, media:
 
         get("/internal/profile/users/{ownerId}/content") {
             val token = call.accessToken() ?: throw AccountUnauthorized()
-            val viewer = account.getMe(token)
+            val actor = account.getCurrentActor(token)
+            account.activateContentForUser(actor.user.id, token)
             val ownerId = call.parameters["ownerId"] ?: throw IllegalArgumentException("ownerId is required")
-            val visibility = account.visibility(ownerId, viewer.id, token)
+            val visibility = account.visibility(ownerId, actor.user.id, token)
             call.respond(
                 content.profileContent(
                     ownerId = ownerId,
                     visibility = visibility,
                     postLimit = call.request.queryParameters["postLimit"]?.toIntOrNull() ?: 12,
                     storyLimit = call.request.queryParameters["storyLimit"]?.toIntOrNull() ?: 8,
-                    authorResolver = authorResolver(viewer, account, token)
+                    authorResolver = authorResolver(actor.user, account, token),
+                    visibilityResolver = visibilityResolver(actor, account, token)
+                )
+            )
+        }
+
+        get("/internal/profile/owners/{ownerType}/{ownerId}/content") {
+            val token = call.accessToken() ?: throw AccountUnauthorized()
+            val actor = account.getCurrentActor(token)
+            account.activateContentForUser(actor.user.id, token)
+            val ownerType = OwnerType.valueOf(call.parameters["ownerType"] ?: throw IllegalArgumentException("ownerType is required"))
+            val ownerId = call.parameters["ownerId"] ?: throw IllegalArgumentException("ownerId is required")
+            val owner = OwnerRef(ownerType, ownerId)
+            val viewer = OwnerRef(actor.activeOwner.ownerType, actor.activeOwner.id)
+            val visibility = account.ownerVisibility(owner, viewer, token)
+            call.respond(
+                content.profileContent(
+                    ownerId = ownerId,
+                    visibility = visibility,
+                    postLimit = call.request.queryParameters["postLimit"]?.toIntOrNull() ?: 12,
+                    storyLimit = call.request.queryParameters["storyLimit"]?.toIntOrNull() ?: 8,
+                    authorResolver = authorResolver(actor.user, account, token),
+                    visibilityResolver = visibilityResolver(actor, account, token)
                 )
             )
         }
@@ -113,14 +138,16 @@ fun Application.registerRoutes(config: AppConfig, account: AccountClient, media:
         post("/graphql") {
             if (call.request.isMultipart()) {
                 val token = call.accessToken() ?: throw AccountUnauthorized()
-                val user = account.getMe(token)
-                call.respond(handleMultipartUpload(call, user, media, content))
+                val actor = account.getCurrentActor(token)
+                account.activateContentForUser(actor.user.id, token)
+                call.respond(handleMultipartUpload(call, actor, media, content, account, token))
                 return@post
             }
             val request = json.decodeFromString(GraphQlRequest.serializer(), call.receiveText())
             val token = call.accessToken()
-            val user = account.getMe(token ?: throw AccountUnauthorized())
-            call.respond(dispatchGraphQl(request, user, account, content, token))
+            val actor = account.getCurrentActor(token ?: throw AccountUnauthorized())
+            account.activateContentForUser(actor.user.id, token)
+            call.respond(dispatchGraphQl(request, actor, account, content, token))
         }
 
         webSocket("/subscriptions") {
@@ -129,7 +156,7 @@ fun Application.registerRoutes(config: AppConfig, account: AccountClient, media:
     }
 }
 
-private suspend fun handleMultipartUpload(call: ApplicationCall, user: SessionUser, media: MediaClient, content: ContentService): GraphQlResponse {
+private suspend fun handleMultipartUpload(call: ApplicationCall, actor: CurrentActor, media: MediaClient, content: ContentService, account: AccountClient, token: String): GraphQlResponse {
     val parts = call.receiveMultipart()
     var operations: GraphQlRequest? = null
     val uploads = mutableListOf<UploadedMedia>()
@@ -154,7 +181,7 @@ private suspend fun handleMultipartUpload(call: ApplicationCall, user: SessionUs
             put("tags", JsonArray(listOf(JsonPrimitive("upload"))))
         })
     }), uploads)
-    val response = dispatchGraphQl(request, user, null, content, null)
+    val response = dispatchGraphQl(request, actor, account, content, token)
     referenceUploads(media, response, uploads)
     return response
 }
@@ -201,116 +228,207 @@ private fun referenceUploads(media: MediaClient, response: GraphQlResponse, uplo
 
 private fun dispatchGraphQl(
     request: GraphQlRequest,
-    user: SessionUser,
+    actor: CurrentActor,
     account: AccountClient?,
     content: ContentService,
     token: String?
 ): GraphQlResponse {
     val operation = request.operationName ?: operationFromQuery(request.query)
     val variables = request.variables ?: JsonObject(emptyMap())
+    val activeOwner = OwnerRef(actor.activeOwner.ownerType, actor.activeOwner.id)
     val data = when (operation) {
+        "currentActor" -> buildJsonObject {
+            put("currentActor", json.encodeToJsonElement(actor))
+        }
         "createPost" -> buildJsonObject {
-            put("createPost", json.encodeToJsonElement(content.createPost(user, decodeInput(variables, CreatePostInput.serializer()))))
+            requireOwnerAction(account, token, actor, OwnerAction.CREATE_CONTENT)
+            val post = content.createPost(actor, decodeInput(variables, CreatePostInput.serializer()))
+            if (account != null && token != null) {
+                account.publishUserActivity("content.post:${post.id}:published", actor.user.id, UserActivityType.POST_PUBLISHED, "post", post.id, token)
+            }
+            put("createPost", json.encodeToJsonElement(post))
         }
         "createStory" -> buildJsonObject {
-            put("createStory", json.encodeToJsonElement(content.createStory(user, decodeInput(variables, CreateStoryInput.serializer()))))
+            requireOwnerAction(account, token, actor, OwnerAction.CREATE_CONTENT)
+            val story = content.createStory(actor, decodeInput(variables, CreateStoryInput.serializer()))
+            if (account != null && token != null) {
+                account.publishUserActivity("content.story:${story.id}:published", actor.user.id, UserActivityType.STORY_PUBLISHED, "story", story.id, token)
+            }
+            put("createStory", json.encodeToJsonElement(story))
         }
         "createComment" -> buildJsonObject {
-            put("createComment", json.encodeToJsonElement(content.createComment(user, decodeInput(variables, CreateCommentInput.serializer()))))
+            requireOwnerAction(account, token, actor, OwnerAction.ACT_AS_OWNER)
+            val comment = content.createComment(actor, decodeInput(variables, CreateCommentInput.serializer()))
+            if (account != null && token != null) {
+                account.publishUserActivity("content.comment:${comment.id}:created", actor.user.id, UserActivityType.POST_COMMENT, "comment", comment.id, token)
+            }
+            put("createComment", json.encodeToJsonElement(comment))
         }
         "feed" -> buildJsonObject {
             val tags = variables["tags"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }?.toSet().orEmpty()
             val limit = variables["limit"]?.jsonPrimitive?.intOrNull ?: 20
-            put("feed", json.encodeToJsonElement(content.feed(user.id, tags, limit, authorResolver(user, account, token))))
+            put("feed", json.encodeToJsonElement(content.feed(activeOwner, tags, limit, authorResolver(actor.user, account, token))))
         }
         "recommendationFeed" -> buildJsonObject {
             val input = decodeInput(variables, RecommendationFeedInput.serializer())
-            val graph = if (account != null && token != null) account.socialGraph(user.id, token) else AccountSocialGraph()
+            val graph = if (account != null && token != null) account.ownerSocialGraph(activeOwner, token) else AccountSocialGraph()
             put("recommendationFeed", json.encodeToJsonElement(content.recommendationFeed(
-                viewerId = user.id,
+                viewer = activeOwner,
                 input = input,
                 socialGraph = graph,
-                authorResolver = authorResolver(user, account, token)
+                authorResolver = authorResolver(actor.user, account, token)
             )))
         }
         "post" -> buildJsonObject {
             val id = variables["id"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("id is required")
-            put("post", json.encodeToJsonElement(content.post(id, user.id, authorResolver(user, account, token))))
+            put("post", json.encodeToJsonElement(content.post(id, activeOwner, authorResolver(actor.user, account, token))))
         }
         "story" -> buildJsonObject {
             val id = variables["id"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("id is required")
-            put("story", json.encodeToJsonElement(content.story(id, user.id)))
+            put("story", json.encodeToJsonElement(content.story(id, activeOwner)))
         }
         "storiesFeed" -> buildJsonObject {
             val limit = variables["limit"]?.jsonPrimitive?.intOrNull ?: 40
-            val resolver = authorResolver(user, account, token)
-            val visibilityResolver = visibilityResolver(user, account, token)
-            put("storiesFeed", json.encodeToJsonElement(content.storiesFeed(user.id, limit, resolver, visibilityResolver)))
+            val resolver = authorResolver(actor.user, account, token)
+            val visibilityResolver = visibilityResolver(actor, account, token)
+            put("storiesFeed", json.encodeToJsonElement(content.storiesFeed(activeOwner, limit, resolver, visibilityResolver)))
         }
         "storyGroup" -> buildJsonObject {
             val authorId = variables["authorId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("authorId is required")
+            val ownerType = variables["ownerType"]?.jsonPrimitive?.contentOrNull?.let { OwnerType.valueOf(it) } ?: OwnerType.USER
             val startStoryId = variables["startStoryId"]?.jsonPrimitive?.contentOrNull
             val archive = variables["archive"]?.jsonPrimitive?.booleanOrNull ?: false
             put("storyGroup", json.encodeToJsonElement(content.storyGroup(
-                viewerId = user.id,
+                viewer = activeOwner,
                 authorId = authorId,
+                ownerType = ownerType,
                 startStoryId = startStoryId,
-                authorResolver = authorResolver(user, account, token),
-                visibilityResolver = visibilityResolver(user, account, token),
+                authorResolver = authorResolver(actor.user, account, token),
+                visibilityResolver = visibilityResolver(actor, account, token),
                 archive = archive
             )))
         }
         "storyArchive" -> buildJsonObject {
-            val ownerId = variables["ownerId"]?.jsonPrimitive?.content ?: user.id
+            val ownerId = variables["ownerId"]?.jsonPrimitive?.content ?: actor.activeOwner.id
+            val ownerType = variables["ownerType"]?.jsonPrimitive?.contentOrNull?.let { OwnerType.valueOf(it) } ?: actor.activeOwner.ownerType
             val limit = variables["limit"]?.jsonPrimitive?.intOrNull ?: 40
             val cursor = variables["cursor"]?.jsonPrimitive?.contentOrNull?.let(Instant::parse)
-            val owner = authorResolver(user, account, token)(ownerId)
-            val visibility = visibilityResolver(user, account, token)(ownerId)
+            val ownerKey = OwnerRef(ownerType, ownerId).key()
+            val owner = authorResolver(actor.user, account, token)(ownerKey)
+            val visibility = visibilityResolver(actor, account, token)(ownerKey)
             put("storyArchive", json.encodeToJsonElement(content.storyArchive(ownerId, visibility, owner, limit, cursor)))
         }
         "comments" -> buildJsonObject {
             val postId = variables["postId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("postId is required")
             val limit = variables["limit"]?.jsonPrimitive?.intOrNull ?: 100
-            put("comments", json.encodeToJsonElement(content.comments(postId, limit, user.id, authorResolver(user, account, token))))
+            put("comments", json.encodeToJsonElement(content.comments(postId, limit, activeOwner, authorResolver(actor.user, account, token))))
         }
         "profileContent" -> buildJsonObject {
-            val ownerId = variables["ownerId"]?.jsonPrimitive?.content ?: user.id
-            val visibility = if (account != null && token != null) account.visibility(ownerId, user.id, token)
-            else AccountVisibility(ownerId = ownerId, viewerId = user.id)
-            put("profileContent", json.encodeToJsonElement(content.profileContent(ownerId, visibility, 12, 8, authorResolver(user, account, token))))
+            val ownerId = variables["ownerId"]?.jsonPrimitive?.content ?: actor.activeOwner.id
+            val ownerType = variables["ownerType"]?.jsonPrimitive?.contentOrNull?.let { OwnerType.valueOf(it) } ?: actor.activeOwner.ownerType
+            val owner = OwnerRef(ownerType, ownerId)
+            val visibility = if (account != null && token != null) account.ownerVisibility(owner, activeOwner, token)
+            else AccountVisibility(ownerId = ownerId, ownerType = ownerType, viewerId = activeOwner.ownerId, viewerType = activeOwner.ownerType)
+            put("profileContent", json.encodeToJsonElement(content.profileContent(ownerId, visibility, 12, 8, authorResolver(actor.user, account, token), visibilityResolver(actor, account, token))))
+        }
+        "collections" -> buildJsonObject {
+            val ownerId = variables["ownerId"]?.jsonPrimitive?.content ?: actor.activeOwner.id
+            val ownerType = variables["ownerType"]?.jsonPrimitive?.contentOrNull?.let { OwnerType.valueOf(it) } ?: actor.activeOwner.ownerType
+            val limit = variables["limit"]?.jsonPrimitive?.intOrNull ?: 80
+            val owner = OwnerRef(ownerType, ownerId)
+            val visibility = if (account != null && token != null) account.ownerVisibility(owner, activeOwner, token)
+            else AccountVisibility(ownerId = ownerId, ownerType = ownerType, viewerId = activeOwner.ownerId, viewerType = activeOwner.ownerType)
+            put("collections", json.encodeToJsonElement(content.collections(owner, visibility, limit, visibilityResolver(actor, account, token))))
+        }
+        "collection" -> buildJsonObject {
+            val id = variables["id"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("id is required")
+            val limit = variables["limit"]?.jsonPrimitive?.intOrNull ?: 200
+            put("collection", json.encodeToJsonElement(content.collection(
+                id = id,
+                viewer = activeOwner,
+                visibilityResolver = visibilityResolver(actor, account, token),
+                authorResolver = authorResolver(actor.user, account, token),
+                limit = limit
+            )))
+        }
+        "createCollection" -> buildJsonObject {
+            requireOwnerAction(account, token, actor, OwnerAction.ACT_AS_OWNER)
+            put("createCollection", json.encodeToJsonElement(content.createCollection(actor, decodeInput(variables, CreateCollectionInput.serializer()))))
+        }
+        "updateCollection" -> buildJsonObject {
+            requireOwnerAction(account, token, actor, OwnerAction.ACT_AS_OWNER)
+            put("updateCollection", json.encodeToJsonElement(content.updateCollection(actor, decodeInput(variables, UpdateCollectionInput.serializer()))))
+        }
+        "deleteCollection" -> buildJsonObject {
+            val id = variables["id"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("id is required")
+            requireOwnerAction(account, token, actor, OwnerAction.ACT_AS_OWNER)
+            content.deleteCollection(actor, id)
+            put("deleteCollection", JsonPrimitive(true))
+        }
+        "postCollections" -> buildJsonObject {
+            val postId = variables["postId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("postId is required")
+            put("postCollections", json.encodeToJsonElement(content.postCollections(actor, postId)))
+        }
+        "setPostCollections" -> buildJsonObject {
+            requireOwnerAction(account, token, actor, OwnerAction.ACT_AS_OWNER)
+            put("setPostCollections", json.encodeToJsonElement(content.setPostCollections(
+                actor = actor,
+                input = decodeInput(variables, SetPostCollectionsInput.serializer()),
+                visibilityResolver = visibilityResolver(actor, account, token)
+            )))
+        }
+        "addPostToCollection" -> buildJsonObject {
+            val collectionId = variables["collectionId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("collectionId is required")
+            val postId = variables["postId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("postId is required")
+            requireOwnerAction(account, token, actor, OwnerAction.ACT_AS_OWNER)
+            put("addPostToCollection", json.encodeToJsonElement(content.addPostToCollection(actor, collectionId, postId, visibilityResolver(actor, account, token))))
+        }
+        "removePostFromCollection" -> buildJsonObject {
+            val collectionId = variables["collectionId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("collectionId is required")
+            val postId = variables["postId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("postId is required")
+            requireOwnerAction(account, token, actor, OwnerAction.ACT_AS_OWNER)
+            put("removePostFromCollection", json.encodeToJsonElement(content.removePostFromCollection(actor, collectionId, postId)))
         }
         "likePost" -> buildJsonObject {
             val postId = variables["postId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("postId is required")
-            put("likePost", json.encodeToJsonElement(content.likePost(user, postId)))
+            requireOwnerAction(account, token, actor, OwnerAction.ACT_AS_OWNER)
+            put("likePost", json.encodeToJsonElement(content.likePost(actor, postId)))
         }
         "unlikePost" -> buildJsonObject {
             val postId = variables["postId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("postId is required")
-            put("unlikePost", json.encodeToJsonElement(content.unlikePost(user, postId)))
+            requireOwnerAction(account, token, actor, OwnerAction.ACT_AS_OWNER)
+            put("unlikePost", json.encodeToJsonElement(content.unlikePost(actor, postId)))
         }
         "likeStory" -> buildJsonObject {
             val storyId = variables["storyId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("storyId is required")
-            put("likeStory", json.encodeToJsonElement(content.likeStory(user, storyId)))
+            requireOwnerAction(account, token, actor, OwnerAction.ACT_AS_OWNER)
+            put("likeStory", json.encodeToJsonElement(content.likeStory(actor, storyId)))
         }
         "unlikeStory" -> buildJsonObject {
             val storyId = variables["storyId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("storyId is required")
-            put("unlikeStory", json.encodeToJsonElement(content.unlikeStory(user, storyId)))
+            requireOwnerAction(account, token, actor, OwnerAction.ACT_AS_OWNER)
+            put("unlikeStory", json.encodeToJsonElement(content.unlikeStory(actor, storyId)))
         }
         "likeComment" -> buildJsonObject {
             val commentId = variables["commentId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("commentId is required")
-            put("likeComment", json.encodeToJsonElement(content.likeComment(user, commentId)))
+            requireOwnerAction(account, token, actor, OwnerAction.ACT_AS_OWNER)
+            put("likeComment", json.encodeToJsonElement(content.likeComment(actor, commentId)))
         }
         "unlikeComment" -> buildJsonObject {
             val commentId = variables["commentId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("commentId is required")
-            put("unlikeComment", json.encodeToJsonElement(content.unlikeComment(user, commentId)))
+            requireOwnerAction(account, token, actor, OwnerAction.ACT_AS_OWNER)
+            put("unlikeComment", json.encodeToJsonElement(content.unlikeComment(actor, commentId)))
         }
         "recordView" -> buildJsonObject {
             val postId = variables["postId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("postId is required")
             val durationMs = variables["durationMs"]?.jsonPrimitive?.longOrNull ?: 0L
-            put(operation, JsonPrimitive(content.recordPostView(user, postId, durationMs)))
+            requireOwnerAction(account, token, actor, OwnerAction.ACT_AS_OWNER)
+            put(operation, JsonPrimitive(content.recordPostView(actor, postId, durationMs)))
         }
         "recordStoryView" -> buildJsonObject {
             val storyId = variables["storyId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("storyId is required")
-            put("recordStoryView", JsonPrimitive(content.recordStoryView(user, storyId)))
+            requireOwnerAction(account, token, actor, OwnerAction.ACT_AS_OWNER)
+            put("recordStoryView", JsonPrimitive(content.recordStoryView(actor, storyId)))
         }
         else -> throw IllegalArgumentException("Unsupported GraphQL operation: ${operation ?: "unknown"}")
     }
@@ -319,24 +437,27 @@ private fun dispatchGraphQl(
 
 private fun operationFromQuery(query: String?): String? {
     if (query.isNullOrBlank()) return null
-    return listOf("createPost", "createStory", "createComment", "recommendationFeed", "feed", "post", "storyGroup", "storyArchive", "story", "storiesFeed", "comments", "profileContent", "likePost", "unlikePost", "likeStory", "unlikeStory", "likeComment", "unlikeComment", "recordView", "recordStoryView")
+    return listOf("currentActor", "createPost", "createStory", "createComment", "recommendationFeed", "postCollections", "setPostCollections", "addPostToCollection", "removePostFromCollection", "createCollection", "updateCollection", "deleteCollection", "profileContent", "storyGroup", "storyArchive", "storiesFeed", "collections", "collection", "comments", "likePost", "unlikePost", "likeStory", "unlikeStory", "likeComment", "unlikeComment", "recordStoryView", "recordView", "feed", "post", "story")
         .firstOrNull { query.contains(it) }
 }
 
 private fun authorResolver(user: SessionUser, account: AccountClient?, token: String?): (String) -> AccountUser? {
     val cache = mutableMapOf<String, AccountUser?>()
-    return { authorId ->
-        cache.getOrPut(authorId) {
-            if (authorId == user.id) {
+    return { ownerKey ->
+        cache.getOrPut(ownerKey) {
+            val owner = ownerKey.toOwnerRef()
+            if (owner.ownerType == OwnerType.USER && owner.ownerId == user.id) {
                 AccountUser(
                     id = user.id,
+                    ownerType = OwnerType.USER,
                     username = user.username,
+                    displayName = listOfNotNull(user.firstName, user.lastName).joinToString(" ").ifBlank { user.username },
                     firstName = user.firstName,
                     lastName = user.lastName,
                     avatarUrl = user.avatarUrl
                 )
             } else if (account != null && token != null) {
-                account.getUser(authorId, token)
+                account.getOwner(owner, token)
             } else {
                 null
             }
@@ -344,15 +465,39 @@ private fun authorResolver(user: SessionUser, account: AccountClient?, token: St
     }
 }
 
-private fun visibilityResolver(user: SessionUser, account: AccountClient?, token: String?): (String) -> AccountVisibility {
+private fun requireOwnerAction(account: AccountClient?, token: String?, actor: CurrentActor, action: OwnerAction) {
+    if (actor.activeOwner.ownerType == OwnerType.USER && actor.activeOwner.id == actor.user.id) return
+    if (account == null || token == null) throw AccountUnauthorized()
+    val allowed = account.authorize(OwnerRef(actor.activeOwner.ownerType, actor.activeOwner.id), action, token)
+    if (!allowed) throw IllegalArgumentException("Active owner is not allowed to perform this action")
+}
+
+private fun String.toOwnerRef(): OwnerRef {
+    val parts = split(":", limit = 2)
+    return if (parts.size == 2) {
+        OwnerRef(OwnerType.valueOf(parts[0]), parts[1])
+    } else {
+        OwnerRef(OwnerType.USER, this)
+    }
+}
+
+private fun visibilityResolver(actor: CurrentActor, account: AccountClient?, token: String?): (String) -> AccountVisibility {
     val cache = mutableMapOf<String, AccountVisibility>()
-    return { ownerId ->
-        cache.getOrPut(ownerId) {
-            if (account != null && token != null) account.visibility(ownerId, user.id, token)
-            else AccountVisibility(ownerId = ownerId, viewerId = user.id)
+    return { ownerKey ->
+        cache.getOrPut(ownerKey) {
+            val owner = ownerKey.toOwnerRef()
+            val viewer = OwnerRef(actor.activeOwner.ownerType, actor.activeOwner.id)
+            if (account != null && token != null) {
+                account.ownerVisibility(owner, viewer, token)
+            } else {
+                AccountVisibility(ownerId = owner.ownerId, ownerType = owner.ownerType, viewerId = viewer.ownerId, viewerType = viewer.ownerType)
+            }
         }
     }
 }
+
+private fun OwnerRef.key(): String =
+    if (ownerType == OwnerType.USER) ownerId else "${ownerType.name}:$ownerId"
 
 private fun <T> decodeInput(variables: JsonObject, serializer: kotlinx.serialization.KSerializer<T>): T {
     val element = variables["input"] ?: variables

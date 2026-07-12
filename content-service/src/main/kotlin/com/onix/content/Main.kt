@@ -29,9 +29,12 @@ fun Application.module(config: AppConfig = AppConfig.fromEnv()) {
     } else {
         JdbcContentRepository(dataSource)
     }
+    val account = AccountClient(config)
+    runCatching { account.registerContentNotificationCatalog() }
+        .onFailure { environment.log.warn("Failed to register content notification catalog: ${it.message}") }
     registerRoutes(
         config = config,
-        account = AccountClient(config.accountBaseUrl),
+        account = account,
         media = MediaClient(config.mediaBaseUrl, config.mediaApiKey),
         content = ContentService(repository, RabbitSearchEventPublisher(config.rabbitmqUrl))
     )

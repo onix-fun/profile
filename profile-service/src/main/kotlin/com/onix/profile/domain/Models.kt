@@ -16,7 +16,9 @@ data class SessionUser(
 @Serializable
 data class AccountSearchUser(
     val id: String,
+    val ownerType: String = "USER",
     val username: String,
+    val displayName: String? = null,
     val firstName: String? = null,
     val lastName: String? = null,
     val avatarUrl: String? = null,
@@ -26,7 +28,9 @@ data class AccountSearchUser(
 @Serializable
 data class RelatedUser(
     val id: String,
+    val ownerType: String = "USER",
     val username: String,
+    val displayName: String? = null,
     val firstName: String? = null,
     val lastName: String? = null,
     val avatarUrl: String? = null,
@@ -52,10 +56,18 @@ data class SocialCanvasResponse(
 @Serializable
 data class AccountUser(
     val id: String,
+    val ownerType: String = "USER",
     val username: String,
+    val displayName: String? = null,
     val firstName: String? = null,
     val lastName: String? = null,
     val avatarUrl: String? = null
+)
+
+@Serializable
+data class CurrentActor(
+    val user: SessionUser,
+    val activeOwner: AccountUser
 )
 
 @Serializable
@@ -83,7 +95,9 @@ data class ContentBlock(
 @Serializable
 data class AccountProfile(
     val id: String,
+    val ownerType: String = "USER",
     val username: String,
+    val displayName: String? = null,
     val firstName: String? = null,
     val lastName: String? = null,
     val bio: String? = null,
@@ -100,6 +114,8 @@ data class AccountProfile(
 data class ProfileContentPost(
     val id: String,
     val authorId: String? = null,
+    val ownerType: String = "USER",
+    val ownerId: String? = authorId,
     val author: AccountUser? = null,
     val title: String? = null,
     val text: String = "",
@@ -126,10 +142,26 @@ data class ProfileContentComment(
 )
 
 @Serializable
+data class ProfileContentCollection(
+    val id: String,
+    val ownerType: String = "USER",
+    val ownerId: String,
+    val title: String,
+    val description: String? = null,
+    val cover: JsonObject? = null,
+    val visibility: String = "PRIVATE",
+    val itemCount: Int = 0,
+    val previewBlocks: List<ContentBlock> = emptyList(),
+    val createdAt: String? = null,
+    val updatedAt: String? = null
+)
+
+@Serializable
 data class ProfileContentSummary(
     val posts: List<ProfileContentPost> = emptyList(),
     val stories: List<ProfileContentStory> = emptyList(),
-    val comments: List<ProfileContentComment> = emptyList()
+    val comments: List<ProfileContentComment> = emptyList(),
+    val collections: List<ProfileContentCollection> = emptyList()
 )
 
 @Serializable

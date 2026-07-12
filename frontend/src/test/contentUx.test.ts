@@ -26,6 +26,10 @@ vi.mock("primevue/usetoast", () => ({
 
 vi.mock("@/api/contentService", () => ({
 	ContentService: {
+    currentActor: vi.fn().mockResolvedValue({
+      user: { id: "viewer", username: "viewer" },
+      activeOwner: { id: "viewer", ownerType: "USER", username: "viewer" },
+    }),
 	    story: vi.fn().mockResolvedValue({
 	      id: "story-1",
 	      authorId: "alice",
@@ -42,23 +46,39 @@ vi.mock("@/api/contentService", () => ({
 	      author: { username: "alice" },
 	      archive: false,
 	      startStoryId: "story-1",
-	      stories: [{
-	        id: "story-1",
-	        authorId: "alice",
-	        author: { username: "alice" },
-	        visibility: "PUBLIC",
-	        durationMs: 5000,
-	        likeCount: 0,
-	        likedByViewer: false,
-	        remainingLifeSeconds: 3600,
-	        blocks: [
-	          { id: "media", type: "IMAGE", data: { src: "https://example.test/story.jpg" } },
-	          { id: "caption", type: "TEXT", data: { text: "A compact caption #travel", tags: ["travel"] } },
-	        ],
-	      }],
+	      stories: [
+          {
+            id: "story-1",
+            authorId: "alice",
+            author: { username: "alice" },
+            visibility: "PUBLIC",
+            durationMs: 5000,
+            likeCount: 0,
+            likedByViewer: false,
+            remainingLifeSeconds: 3600,
+            blocks: [
+              { id: "media", type: "IMAGE", data: { src: "https://example.test/story.jpg" } },
+              { id: "caption", type: "TEXT", data: { text: "A compact caption #travel", tags: ["travel"] } },
+            ],
+          },
+          {
+            id: "story-2",
+            authorId: "alice",
+            author: { username: "alice" },
+            visibility: "CLOSE_FRIENDS",
+            durationMs: 4000,
+            likeCount: 0,
+            likedByViewer: false,
+            remainingLifeSeconds: 2400,
+            blocks: [
+              { id: "media-2", type: "IMAGE", data: { src: "https://example.test/story-2.jpg" } },
+              { id: "caption-2", type: "TEXT", data: { text: "Second circular story #orbit", tags: ["orbit"] } },
+            ],
+          },
+        ],
 	    }),
 	    storiesFeed: vi.fn().mockResolvedValue([
-	      { authorId: "alice", authorName: "alice", storyIds: ["story-1"], activeCount: 1, seen: false, closeFriends: false, latestAt: "2026-01-01T00:00:00Z" },
+	      { authorId: "alice", authorName: "alice", storyIds: ["story-1", "story-2"], activeCount: 2, seen: false, closeFriends: false, latestAt: "2026-01-01T00:00:00Z" },
 	    ]),
     recommendationFeed: vi.fn(),
     likePost: vi.fn().mockResolvedValue({ postId: "clickable", liked: true, likeCount: 1 }),
@@ -103,6 +123,7 @@ function ensureResizeObserver() {
 beforeEach(() => {
   ensureLocalStorage();
   ensureResizeObserver();
+  vi.clearAllMocks();
 });
 
 function feedItem(id: string, score: number, type: "TEXT" | "IMAGE" | "VIDEO" | "AUDIO" | "FILE" = "TEXT"): FeedItem {
@@ -287,8 +308,8 @@ describe("story composer state", () => {
   });
 });
 
-describe("story viewer caption", () => {
-  it("renders caption as a collapsible bottom sheet", async () => {
+describe("story viewer orbit UI", () => {
+  it("renders caption as a collapsible branch node", async () => {
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [{ path: "/story/:storyId", component: StoryViewer }],
@@ -297,11 +318,14 @@ describe("story viewer caption", () => {
     await router.isReady();
 
     const wrapper = mount(StoryViewer, { global: { plugins: [router] } });
-    await vi.waitFor(() => expect(wrapper.find(".caption-sheet").exists()).toBe(true));
-    const sheet = wrapper.find(".caption-sheet");
+    await vi.waitFor(() => expect(wrapper.find(".story-node--caption").exists()).toBe(true));
+    expect(wrapper.find(".story-orb").exists()).toBe(true);
+    expect(wrapper.find(".story-progress-ring__value").exists()).toBe(true);
+    expect(wrapper.findAll(".story-orbit-dot")).toHaveLength(2);
+    const sheet = wrapper.find(".story-caption-toggle");
     expect(sheet.text()).toContain("A compact caption #travel");
     await sheet.trigger("click");
-    expect(sheet.classes()).toContain("open");
+    expect(wrapper.find(".story-node--caption").classes()).toContain("open");
 
     wrapper.unmount();
   });
@@ -315,12 +339,32 @@ describe("story viewer caption", () => {
     await router.isReady();
 
     const wrapper = mount(StoryViewer, { global: { plugins: [router] } });
-    await vi.waitFor(() => expect(wrapper.find(".caption-sheet").exists()).toBe(true));
+    await vi.waitFor(() => expect(wrapper.find(".story-node--caption").exists()).toBe(true));
     await wrapper.find(".story-like").trigger("click");
 
     expect(ContentService.likeStory).toHaveBeenCalledWith("story-1");
     await vi.waitFor(() => expect(wrapper.find(".story-like").text()).toContain("1"));
     expect(wrapper.find(".story-like").classes()).toContain("active");
+
+    wrapper.unmount();
+  });
+
+  it("switches stories through the orbit selector and records the new view", async () => {
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: "/story/:storyId", component: StoryViewer }],
+    });
+    await router.push("/story/story-1");
+    await router.isReady();
+
+    const wrapper = mount(StoryViewer, { global: { plugins: [router] } });
+    await vi.waitFor(() => expect(wrapper.findAll(".story-orbit-dot")).toHaveLength(2));
+    vi.mocked(ContentService.recordStoryView).mockClear();
+
+    await wrapper.findAll(".story-orbit-dot")[1].trigger("click");
+
+    await vi.waitFor(() => expect(wrapper.find(".story-caption-toggle").text()).toContain("Second circular story"));
+    expect(ContentService.recordStoryView).toHaveBeenCalledWith("story-2");
 
     wrapper.unmount();
   });

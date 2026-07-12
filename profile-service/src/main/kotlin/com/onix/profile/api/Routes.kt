@@ -23,7 +23,7 @@ import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 
 fun Application.registerRoutes(config: AppConfig) {
-    val account = AccountClient(config.accountBaseUrl)
+    val account = AccountClient(config)
     val content = ContentClient(config.contentApiUrl)
 
     install(CallLogging)
@@ -82,7 +82,7 @@ fun Application.registerRoutes(config: AppConfig) {
             call.respond(mapOf("status" to "UP"))
         }
         get("/readyz") {
-            call.respond(HttpStatusCode.OK, mapOf("status" to "UP", "accountApi" to config.accountBaseUrl))
+            call.respond(HttpStatusCode.OK, mapOf("status" to "UP", "accountGrpc" to config.accountGrpcUrl))
         }
         get("/metrics") {
             call.respondText(
@@ -103,15 +103,58 @@ fun Application.registerRoutes(config: AppConfig) {
                 val token = call.accessToken() ?: return@get call.respondAuthRequired(config)
                 val nickname = call.parameters["nickname"]?.takeIf(String::isNotBlank)
                     ?: throw IllegalArgumentException("nickname is required")
-                val currentUser = account.getMe(token)
+                val actor = account.getCurrentActor(token)
                 val profile = account.getProfile(nickname, token)
-                val shell = CanvasMapper.toCanvas(profile, currentUser)
+                val shell = CanvasMapper.toCanvas(profile, actor.user, activeOwner = actor.activeOwner)
                 if (shell.status != "OK") {
                     call.respond(shell)
                     return@get
                 }
-                val profileContent = content.profileContent(profile.id, token)
-                call.respond(CanvasMapper.toCanvas(profile, currentUser, profileContent))
+                val profileContent = content.profileContent(profile.ownerType, profile.id, token)
+                call.respond(CanvasMapper.toCanvas(profile, actor.user, profileContent, actor.activeOwner))
+            }
+
+            get("/organizations/{orgName}") {
+                val token = call.accessToken() ?: return@get call.respondAuthRequired(config)
+                val orgName = call.parameters["orgName"]?.takeIf(String::isNotBlank)
+                    ?: throw IllegalArgumentException("orgName is required")
+                val actor = account.getCurrentActor(token)
+                val profile = account.getOrganizationProfile(orgName, token)
+                val shell = CanvasMapper.toCanvas(profile, actor.user, activeOwner = actor.activeOwner)
+                if (shell.status != "OK") {
+                    call.respond(shell)
+                    return@get
+                }
+                val profileContent = content.profileContent(profile.ownerType, profile.id, token)
+                call.respond(CanvasMapper.toCanvas(profile, actor.user, profileContent, actor.activeOwner))
+            }
+
+            get("/organizations/{orgName}/social") {
+                val token = call.accessToken() ?: return@get call.respondAuthRequired(config)
+                val orgName = call.parameters["orgName"]?.takeIf(String::isNotBlank)
+                    ?: throw IllegalArgumentException("orgName is required")
+                val filter = call.request.queryParameters["filter"]?.lowercase()?.takeIf {
+                    it == "friends" || it == "subscribers" || it == "subscriptions"
+                } ?: "friends"
+                val page = call.request.queryParameters["page"]?.toIntOrNull()?.coerceAtLeast(1) ?: 1
+                val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 80) ?: 40
+                val actor = account.getCurrentActor(token)
+                val profile = account.getOrganizationProfile(orgName, token)
+                val shell = CanvasMapper.toCanvas(profile, actor.user, activeOwner = actor.activeOwner)
+                if (shell.status == "BLOCKED" || shell.status == "PRIVATE") {
+                    call.respond(HttpStatusCode.Forbidden, ErrorResponse(shell.status, "Organization social graph is not available"))
+                    return@get
+                }
+
+                val owners = loadOwnerSocial(account, profile.ownerType, profile.id, filter, page, limit, token)
+                call.respond(SocialCanvasResponse(
+                    owner = profile,
+                    filter = filter,
+                    items = owners.items,
+                    totalCount = owners.totalCount,
+                    page = page,
+                    limit = limit
+                ))
             }
 
             get("/profiles/{nickname}/social") {
@@ -123,19 +166,15 @@ fun Application.registerRoutes(config: AppConfig) {
                 } ?: "friends"
                 val page = call.request.queryParameters["page"]?.toIntOrNull()?.coerceAtLeast(1) ?: 1
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 80) ?: 40
-                val currentUser = account.getMe(token)
+                val actor = account.getCurrentActor(token)
                 val profile = account.getProfile(nickname, token)
-                val shell = CanvasMapper.toCanvas(profile, currentUser)
+                val shell = CanvasMapper.toCanvas(profile, actor.user, activeOwner = actor.activeOwner)
                 if (shell.status == "BLOCKED" || shell.status == "PRIVATE") {
                     call.respond(HttpStatusCode.Forbidden, ErrorResponse(shell.status, "Profile social graph is not available"))
                     return@get
                 }
 
-                val users = when (filter) {
-                    "subscribers" -> account.followers(profile.id, page, limit, token)
-                    "subscriptions" -> account.following(profile.id, page, limit, token)
-                    else -> ownerFriends(account, profile.id, page, limit, token)
-                }
+                val users = loadOwnerSocial(account, profile.ownerType, profile.id, filter, page, limit, token)
                 call.respond(SocialCanvasResponse(
                     owner = profile,
                     filter = filter,
@@ -159,18 +198,56 @@ fun Application.registerRoutes(config: AppConfig) {
                 call.respond(HttpStatusCode.NoContent)
             }
 
+            post("/owners/{ownerType}/{ownerId}/follow") {
+                val token = call.accessToken() ?: return@post call.respondAuthRequired(config)
+                val ownerType = call.parameters["ownerType"] ?: throw IllegalArgumentException("ownerType is required")
+                val ownerId = call.parameters["ownerId"] ?: throw IllegalArgumentException("ownerId is required")
+                call.respond(FollowResponse(account.followOwner(ownerType, ownerId, token)))
+            }
+
+            delete("/owners/{ownerType}/{ownerId}/follow") {
+                val token = call.accessToken() ?: return@delete call.respondAuthRequired(config)
+                val ownerType = call.parameters["ownerType"] ?: throw IllegalArgumentException("ownerType is required")
+                val ownerId = call.parameters["ownerId"] ?: throw IllegalArgumentException("ownerId is required")
+                account.unfollowOwner(ownerType, ownerId, token)
+                call.respond(HttpStatusCode.NoContent)
+            }
+
             get("/profile-search/users") {
                 val token = call.accessToken() ?: return@get call.respondAuthRequired(config)
                 val query = call.request.queryParameters["q"].orEmpty()
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: 10
                 call.respond(account.searchUsers(query, limit, token))
             }
+
+            get("/profile-search/owners") {
+                val token = call.accessToken() ?: return@get call.respondAuthRequired(config)
+                val query = call.request.queryParameters["q"].orEmpty()
+                val limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: 10
+                call.respond(account.searchOwners(query, limit, token))
+            }
         }
     }
 }
 
+private fun loadOwnerSocial(
+    account: AccountClient,
+    ownerType: String,
+    ownerId: String,
+    filter: String,
+    page: Int,
+    limit: Int,
+    token: String
+): UserPageResponse =
+    when (filter) {
+        "subscribers" -> account.ownerFollowers(ownerType, ownerId, page, limit, token)
+        "subscriptions" -> account.ownerFollowing(ownerType, ownerId, page, limit, token)
+        else -> ownerFriends(account, ownerType, ownerId, page, limit, token)
+    }
+
 private fun ownerFriends(
     account: AccountClient,
+    ownerType: String,
     ownerId: String,
     page: Int,
     limit: Int,
@@ -178,13 +255,13 @@ private fun ownerFriends(
 ): UserPageResponse {
     val maxAccountPageSize = 100
     val followers = loadAllSocialUsers { currentPage ->
-        account.followers(ownerId, currentPage, maxAccountPageSize, token)
+        account.ownerFollowers(ownerType, ownerId, currentPage, maxAccountPageSize, token)
     }
     val following = loadAllSocialUsers { currentPage ->
-        account.following(ownerId, currentPage, maxAccountPageSize, token)
+        account.ownerFollowing(ownerType, ownerId, currentPage, maxAccountPageSize, token)
     }
-    val followingIds = following.map { it.id }.toSet()
-    val friends = followers.filter { it.id in followingIds }
+    val followingIds = following.map { "${it.ownerType}:${it.id}" }.toSet()
+    val friends = followers.filter { "${it.ownerType}:${it.id}" in followingIds }
     val from = ((page.coerceAtLeast(1) - 1) * limit).coerceAtMost(friends.size)
     val to = (from + limit).coerceAtMost(friends.size)
     return UserPageResponse(items = friends.subList(from, to), totalCount = friends.size)

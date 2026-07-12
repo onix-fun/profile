@@ -24,7 +24,10 @@ class ContentService(
         val emphasis: FeedEmphasis
     )
 
-    fun createPost(author: SessionUser, input: CreatePostInput): Post {
+    fun createPost(author: SessionUser, input: CreatePostInput): Post =
+        createPost(CurrentActor(author, author.asAccountUser()), input)
+
+    fun createPost(actor: CurrentActor, input: CreatePostInput): Post {
         val normalizedTags = input.tags.map { it.trim().lowercase() }.filter(String::isNotBlank).distinct().take(20)
         val blocks = input.blocks.ifEmpty { if (input.text.isBlank()) emptyList() else listOf(textBlock(input.text)) }
         val text = input.text.ifBlank { blocks.joinToString(" ") { it.searchText() }.trim() }
@@ -33,8 +36,10 @@ class ContentService(
         val post = repository.savePost(
             Post(
                 id = UUID.randomUUID().toString(),
-                authorId = author.id,
-                author = author.asAccountUser(),
+                authorId = actor.activeOwner.id,
+                ownerType = actor.activeOwner.ownerType,
+                ownerId = actor.activeOwner.id,
+                author = actor.activeOwner,
                 title = input.title?.trim()?.takeIf(String::isNotBlank),
                 text = text,
                 blocks = blocks,
@@ -49,15 +54,20 @@ class ContentService(
         return post
     }
 
-    fun createStory(author: SessionUser, input: CreateStoryInput): Story {
+    fun createStory(author: SessionUser, input: CreateStoryInput): Story =
+        createStory(CurrentActor(author, author.asAccountUser()), input)
+
+    fun createStory(actor: CurrentActor, input: CreateStoryInput): Story {
         require(input.blocks.isNotEmpty()) { "Story must contain at least one block" }
         val now = Instant.now(clock)
         val blocks = input.blocks.map(::normalizeStoryBlock)
         return repository.saveStory(
             Story(
                 id = UUID.randomUUID().toString(),
-                authorId = author.id,
-                author = author.asAccountUser(),
+                authorId = actor.activeOwner.id,
+                ownerType = actor.activeOwner.ownerType,
+                ownerId = actor.activeOwner.id,
+                author = actor.activeOwner,
                 blocks = blocks,
                 visibility = input.visibility,
                 durationMs = storyDurationMs(blocks),
@@ -71,7 +81,10 @@ class ContentService(
         )
     }
 
-    fun createComment(author: SessionUser, input: CreateCommentInput): Comment {
+    fun createComment(author: SessionUser, input: CreateCommentInput): Comment =
+        createComment(CurrentActor(author, author.asAccountUser()), input)
+
+    fun createComment(actor: CurrentActor, input: CreateCommentInput): Comment {
         require(input.text.isNotBlank() || input.blocks.isNotEmpty()) { "Comment text is required" }
         val post = repository.findPost(input.postId) ?: throw IllegalArgumentException("Post not found")
         require(post.allowComments) { "Comments are disabled for this post" }
@@ -82,8 +95,10 @@ class ContentService(
             Comment(
                 id = UUID.randomUUID().toString(),
                 postId = input.postId,
-                authorId = author.id,
-                author = author.asAccountUser(),
+                authorId = actor.activeOwner.id,
+                ownerType = actor.activeOwner.ownerType,
+                ownerId = actor.activeOwner.id,
+                author = actor.activeOwner,
                 parentId = null,
                 text = text,
                 blocks = blocks,
@@ -100,21 +115,142 @@ class ContentService(
         visibility: AccountVisibility,
         postLimit: Int,
         storyLimit: Int,
-        authorResolver: (String) -> AccountUser? = { null }
+        authorResolver: (String) -> AccountUser? = { null },
+        visibilityResolver: (String) -> AccountVisibility = { visibility }
     ): ProfileContentResponse {
         if (!visibility.canSeePrivateContent) {
             return ProfileContentResponse()
         }
         val now = Instant.now(clock)
-        val posts = repository.listPostsByAuthor(ownerId, postLimit.coerceIn(1, 500))
-            .map { withViewerState(it, visibility.viewerId) }
+        val owner = OwnerRef(visibility.ownerType, ownerId)
+        val posts = repository.listPostsByOwner(owner, postLimit.coerceIn(1, 500))
+            .filter { canViewPost(it, visibilityResolver(it.ownerRef().key())) }
+            .map { withViewerState(it, visibility.viewerRef()) }
             .map { withAuthor(it, authorResolver) }
-        val stories = repository.listActiveStoriesByAuthor(ownerId, now, storyLimit.coerceIn(1, 50))
+        val stories = repository.listActiveStoriesByOwner(owner, now, storyLimit.coerceIn(1, 50))
             .filter { canViewStory(it, visibility, includeArchived = false) }
-            .map { enrichStory(it, now = now, viewerId = visibility.viewerId) }
+            .map { enrichStory(it, now = now, viewer = visibility.viewerRef()) }
         val comments = posts.flatMap { repository.listCommentsForPost(it.id, 3) }
-            .map { withCommentViewerState(it, visibility.viewerId, authorResolver) }
-        return ProfileContentResponse(posts = posts, stories = stories, comments = comments)
+            .map { withCommentViewerState(it, visibility.viewerRef(), authorResolver) }
+        val collections = collections(owner, visibility, 80, visibilityResolver)
+        return ProfileContentResponse(posts = posts, stories = stories, comments = comments, collections = collections)
+    }
+
+    fun createCollection(actor: CurrentActor, input: CreateCollectionInput): SavedCollection {
+        val title = normalizeCollectionTitle(input.title)
+        val now = Instant.now(clock)
+        return repository.saveCollection(
+            SavedCollection(
+                id = UUID.randomUUID().toString(),
+                ownerType = actor.activeOwner.ownerType,
+                ownerId = actor.activeOwner.id,
+                title = title,
+                description = normalizeCollectionDescription(input.description),
+                cover = input.cover,
+                visibility = input.visibility,
+                createdAt = now,
+                updatedAt = now
+            )
+        )
+    }
+
+    fun updateCollection(actor: CurrentActor, input: UpdateCollectionInput): SavedCollection {
+        val current = repository.findCollection(input.id) ?: throw IllegalArgumentException("Collection not found")
+        requireOwnsCollection(actor.activeOwner.ref(), current)
+        val next = current.copy(
+            title = input.title?.let(::normalizeCollectionTitle) ?: current.title,
+            description = if (input.description != null) normalizeCollectionDescription(input.description) else current.description,
+            cover = input.cover ?: current.cover,
+            visibility = input.visibility ?: current.visibility,
+            updatedAt = Instant.now(clock)
+        )
+        return repository.updateCollection(next)
+    }
+
+    fun deleteCollection(actor: CurrentActor, collectionId: String) {
+        val current = repository.findCollection(collectionId) ?: throw IllegalArgumentException("Collection not found")
+        requireOwnsCollection(actor.activeOwner.ref(), current)
+        repository.deleteCollection(collectionId)
+    }
+
+    fun collections(
+        owner: OwnerRef,
+        visibility: AccountVisibility,
+        limit: Int,
+        visibilityResolver: (String) -> AccountVisibility = { visibility }
+    ): List<SavedCollection> {
+        if (!visibility.canSeePrivateContent) return emptyList()
+        return repository.listCollectionsByOwner(owner, limit.coerceIn(1, 100))
+            .filter { canViewCollection(it, visibility) }
+            .map { enrichCollectionForViewer(it, visibilityResolver) }
+    }
+
+    fun collection(
+        id: String,
+        viewer: OwnerRef,
+        visibilityResolver: (String) -> AccountVisibility,
+        authorResolver: (String) -> AccountUser? = { null },
+        limit: Int = 200
+    ): CollectionDetail {
+        val collection = repository.findCollection(id) ?: throw IllegalArgumentException("Collection not found")
+        val ownerVisibility = visibilityResolver(collection.ownerRef().key())
+        require(canViewCollection(collection, ownerVisibility)) { "Collection not found" }
+        val posts = repository.listCollectionPosts(collection.id, limit.coerceIn(1, 500))
+            .filter { post -> canViewPost(post, visibilityResolver(post.ownerRef().key())) }
+            .map { withViewerState(it, viewer) }
+            .map { withAuthor(it, authorResolver) }
+        return CollectionDetail(
+            collection = collection.copy(
+                itemCount = posts.size,
+                previewBlocks = previewBlocks(posts)
+            ),
+            posts = posts
+        )
+    }
+
+    fun postCollections(actor: CurrentActor, postId: String): PostCollectionsState {
+        repository.findPost(postId) ?: throw IllegalArgumentException("Post not found")
+        return PostCollectionsState(postId = postId, collectionIds = repository.listPostCollectionIds(actor.activeOwner.ref(), postId))
+    }
+
+    fun setPostCollections(
+        actor: CurrentActor,
+        input: SetPostCollectionsInput,
+        visibilityResolver: (String) -> AccountVisibility
+    ): PostCollectionsState {
+        val post = repository.findPost(input.postId) ?: throw IllegalArgumentException("Post not found")
+        require(canViewPost(post, visibilityResolver(post.ownerRef().key()))) { "Post is not available" }
+        val owner = actor.activeOwner.ref()
+        val desired = input.collectionIds.distinct()
+        val desiredCollections = desired.map { id ->
+            (repository.findCollection(id) ?: throw IllegalArgumentException("Collection not found")).also {
+                requireOwnsCollection(owner, it)
+            }
+        }
+        val current = repository.listPostCollectionIds(owner, input.postId).toSet()
+        val desiredSet = desiredCollections.map { it.id }.toSet()
+        val now = Instant.now(clock)
+        (desiredSet - current).forEach { repository.addPostToCollection(it, input.postId, now) }
+        (current - desiredSet).forEach { repository.removePostFromCollection(it, input.postId) }
+        return PostCollectionsState(postId = input.postId, collectionIds = repository.listPostCollectionIds(owner, input.postId))
+    }
+
+    fun addPostToCollection(
+        actor: CurrentActor,
+        collectionId: String,
+        postId: String,
+        visibilityResolver: (String) -> AccountVisibility
+    ): PostCollectionsState {
+        val current = postCollections(actor, postId).collectionIds.toMutableSet()
+        current.add(collectionId)
+        return setPostCollections(actor, SetPostCollectionsInput(postId, current.toList()), visibilityResolver)
+    }
+
+    fun removePostFromCollection(actor: CurrentActor, collectionId: String, postId: String): PostCollectionsState {
+        val collection = repository.findCollection(collectionId) ?: throw IllegalArgumentException("Collection not found")
+        requireOwnsCollection(actor.activeOwner.ref(), collection)
+        repository.removePostFromCollection(collectionId, postId)
+        return PostCollectionsState(postId = postId, collectionIds = repository.listPostCollectionIds(actor.activeOwner.ref(), postId))
     }
 
     fun feed(
@@ -122,16 +258,24 @@ class ContentService(
         tagAffinity: Set<String>,
         limit: Int,
         authorResolver: (String) -> AccountUser? = { null }
+    ): List<FeedItem> =
+        feed(OwnerRef(OwnerType.USER, viewerId), tagAffinity, limit, authorResolver)
+
+    fun feed(
+        viewer: OwnerRef,
+        tagAffinity: Set<String>,
+        limit: Int,
+        authorResolver: (String) -> AccountUser? = { null }
     ): List<FeedItem> {
         return repository.listRecentPosts(limit.coerceIn(1, 100) * 3)
-            .map { withViewerState(it, viewerId) }
+            .map { withViewerState(it, viewer) }
             .map { withAuthor(it, authorResolver) }
             .map { post ->
                 val tagScore = post.tags.count { it in tagAffinity } * 4.0
                 val likeScore = post.likeCount.coerceAtMost(30) * 0.15
                 val ageHours = java.time.Duration.between(post.createdAt, Instant.now(clock)).toHours().coerceAtLeast(0)
                 val recencyScore = 1.0 / (1 + ageHours).toDouble()
-                val ownPenalty = if (post.authorId == viewerId) -2.0 else 0.0
+                val ownPenalty = if (post.ownerType == viewer.ownerType && post.ownerId == viewer.ownerId) -2.0 else 0.0
                 FeedItem(
                     post = post,
                     score = tagScore + likeScore + recencyScore + ownPenalty,
@@ -151,17 +295,25 @@ class ContentService(
         input: RecommendationFeedInput,
         socialGraph: AccountSocialGraph = AccountSocialGraph(),
         authorResolver: (String) -> AccountUser? = { null }
+    ): RecommendationFeedResponse =
+        recommendationFeed(OwnerRef(OwnerType.USER, viewerId), input, socialGraph, authorResolver)
+
+    fun recommendationFeed(
+        viewer: OwnerRef,
+        input: RecommendationFeedInput,
+        socialGraph: AccountSocialGraph = AccountSocialGraph(),
+        authorResolver: (String) -> AccountUser? = { null }
     ): RecommendationFeedResponse {
         val pageLimit = input.limit.coerceIn(1, 50)
         val seed = input.sessionSeed.ifBlank { "default" }
         val blockedIds = socialGraph.blockedIds.toSet()
-        val tagAffinity = repository.listViewerTagAffinity(viewerId, 80).toSet()
+        val tagAffinity = repository.listViewerTagAffinity(viewer, 80).toSet()
         val now = Instant.now(clock)
         val candidates = repository.listRecentPosts(500)
-            .filter { it.authorId !in blockedIds }
-            .map { withViewerState(it, viewerId) }
+            .filter { it.ownerId !in blockedIds }
+            .map { withViewerState(it, viewer) }
             .map { withAuthor(it, authorResolver) }
-            .map { post -> scoreRecommendation(post, viewerId, tagAffinity, socialGraph, now) }
+            .map { post -> scoreRecommendation(post, viewer, tagAffinity, socialGraph, now) }
 
         val ordered = stableRecommendationOrder(candidates, seed)
         val offset = chunkOrdinal(input.chunkX, input.chunkY) * pageLimit
@@ -188,48 +340,76 @@ class ContentService(
         viewerId: String? = null,
         authorResolver: (String) -> AccountUser? = { null }
     ): Post? =
+        post(id, viewerId?.let { OwnerRef(OwnerType.USER, it) }, authorResolver)
+
+    fun post(
+        id: String,
+        viewer: OwnerRef?,
+        authorResolver: (String) -> AccountUser? = { null }
+    ): Post? =
         repository.findPost(id)
-            ?.let { withViewerState(it, viewerId) }
+            ?.let { withViewerState(it, viewer) }
             ?.let { withAuthor(it, authorResolver) }
 
-    fun likePost(user: SessionUser, postId: String): PostReactionState {
+    fun likePost(user: SessionUser, postId: String): PostReactionState =
+        likePost(CurrentActor(user, user.asAccountUser()), postId)
+
+    fun likePost(actor: CurrentActor, postId: String): PostReactionState {
         repository.findPost(postId) ?: throw IllegalArgumentException("Post not found")
-        repository.setPostLike(postId, user.id, true)
+        repository.setPostLike(postId, actor.activeOwner.ref(), true)
         return PostReactionState(postId = postId, liked = true, likeCount = repository.countPostLikes(postId))
     }
 
-    fun unlikePost(user: SessionUser, postId: String): PostReactionState {
+    fun unlikePost(user: SessionUser, postId: String): PostReactionState =
+        unlikePost(CurrentActor(user, user.asAccountUser()), postId)
+
+    fun unlikePost(actor: CurrentActor, postId: String): PostReactionState {
         repository.findPost(postId) ?: throw IllegalArgumentException("Post not found")
-        repository.setPostLike(postId, user.id, false)
+        repository.setPostLike(postId, actor.activeOwner.ref(), false)
         return PostReactionState(postId = postId, liked = false, likeCount = repository.countPostLikes(postId))
     }
 
-    fun likeStory(user: SessionUser, storyId: String): StoryReactionState {
+    fun likeStory(user: SessionUser, storyId: String): StoryReactionState =
+        likeStory(CurrentActor(user, user.asAccountUser()), storyId)
+
+    fun likeStory(actor: CurrentActor, storyId: String): StoryReactionState {
         repository.findStory(storyId) ?: throw IllegalArgumentException("Story not found")
-        repository.setStoryLike(storyId, user.id, true)
+        repository.setStoryLike(storyId, actor.activeOwner.ref(), true)
         return StoryReactionState(storyId = storyId, liked = true, likeCount = repository.countStoryLikes(storyId))
     }
 
-    fun unlikeStory(user: SessionUser, storyId: String): StoryReactionState {
+    fun unlikeStory(user: SessionUser, storyId: String): StoryReactionState =
+        unlikeStory(CurrentActor(user, user.asAccountUser()), storyId)
+
+    fun unlikeStory(actor: CurrentActor, storyId: String): StoryReactionState {
         repository.findStory(storyId) ?: throw IllegalArgumentException("Story not found")
-        repository.setStoryLike(storyId, user.id, false)
+        repository.setStoryLike(storyId, actor.activeOwner.ref(), false)
         return StoryReactionState(storyId = storyId, liked = false, likeCount = repository.countStoryLikes(storyId))
     }
 
-    fun likeComment(user: SessionUser, commentId: String): CommentReactionState {
+    fun likeComment(user: SessionUser, commentId: String): CommentReactionState =
+        likeComment(CurrentActor(user, user.asAccountUser()), commentId)
+
+    fun likeComment(actor: CurrentActor, commentId: String): CommentReactionState {
         repository.findComment(commentId) ?: throw IllegalArgumentException("Comment not found")
-        repository.setCommentLike(commentId, user.id, true)
+        repository.setCommentLike(commentId, actor.activeOwner.ref(), true)
         return CommentReactionState(commentId = commentId, liked = true, likeCount = repository.countCommentLikes(commentId))
     }
 
-    fun unlikeComment(user: SessionUser, commentId: String): CommentReactionState {
+    fun unlikeComment(user: SessionUser, commentId: String): CommentReactionState =
+        unlikeComment(CurrentActor(user, user.asAccountUser()), commentId)
+
+    fun unlikeComment(actor: CurrentActor, commentId: String): CommentReactionState {
         repository.findComment(commentId) ?: throw IllegalArgumentException("Comment not found")
-        repository.setCommentLike(commentId, user.id, false)
+        repository.setCommentLike(commentId, actor.activeOwner.ref(), false)
         return CommentReactionState(commentId = commentId, liked = false, likeCount = repository.countCommentLikes(commentId))
     }
 
     fun story(id: String, viewerId: String? = null): Story? =
-        repository.findStory(id)?.let { enrichStory(it, now = Instant.now(clock), viewerId = viewerId) }
+        story(id, viewerId?.let { OwnerRef(OwnerType.USER, it) })
+
+    fun story(id: String, viewer: OwnerRef?): Story? =
+        repository.findStory(id)?.let { enrichStory(it, now = Instant.now(clock), viewer = viewer) }
 
     fun comments(
         postId: String,
@@ -237,34 +417,52 @@ class ContentService(
         viewerId: String? = null,
         authorResolver: (String) -> AccountUser? = { null }
     ): List<Comment> =
+        comments(postId, limit, viewerId?.let { OwnerRef(OwnerType.USER, it) }, authorResolver)
+
+    fun comments(
+        postId: String,
+        limit: Int,
+        viewer: OwnerRef?,
+        authorResolver: (String) -> AccountUser? = { null }
+    ): List<Comment> =
         repository.listCommentsForPost(postId, limit.coerceIn(1, 100))
-            .map { withCommentViewerState(it, viewerId, authorResolver) }
+            .map { withCommentViewerState(it, viewer, authorResolver) }
 
     fun storiesFeed(
         viewerId: String,
         limit: Int,
         authorResolver: (String) -> AccountUser? = { null },
         visibilityResolver: (String) -> AccountVisibility = { ownerId -> AccountVisibility(ownerId = ownerId, viewerId = viewerId) }
+    ): List<StoryRailItem> =
+        storiesFeed(OwnerRef(OwnerType.USER, viewerId), limit, authorResolver, visibilityResolver)
+
+    fun storiesFeed(
+        viewer: OwnerRef,
+        limit: Int,
+        authorResolver: (String) -> AccountUser? = { null },
+        visibilityResolver: (String) -> AccountVisibility = { ownerKey -> AccountVisibility(ownerId = ownerKey.toOwnerRef().ownerId, ownerType = ownerKey.toOwnerRef().ownerType, viewerId = viewer.ownerId, viewerType = viewer.ownerType) }
     ): List<StoryRailItem> {
         val now = Instant.now(clock)
         return repository.listActiveStories(now, limit.coerceIn(1, 100))
-            .filter { story -> canViewStory(story, visibilityResolver(story.authorId), includeArchived = false) }
-            .groupBy { it.authorId }
+            .filter { story -> canViewStory(story, visibilityResolver(story.ownerKey()), includeArchived = false) }
+            .groupBy { it.ownerKey() }
             .values
             .map { stories ->
                 val latest = stories.maxBy { it.createdAt }
                 val oldest = stories.minBy { it.createdAt }
-                val author = authorResolver(latest.authorId)
+                val author = authorResolver(latest.ownerKey())
                 StoryRailItem(
                     authorId = latest.authorId,
-                    authorName = author?.username ?: if (latest.authorId == viewerId) "You" else "User",
+                    ownerType = latest.ownerType,
+                    ownerId = latest.ownerId,
+                    authorName = author?.username ?: if (latest.ownerType == viewer.ownerType && latest.ownerId == viewer.ownerId) "You" else "User",
                     author = author,
                     avatarUrl = author?.avatarUrl,
                     storyIds = stories.sortedBy { it.createdAt }.map { it.id },
                     activeCount = stories.size,
-                    seen = stories.all { repository.isStoryViewed(it.id, viewerId) },
+                    seen = stories.all { repository.isStoryViewed(it.id, viewer) },
                     closeFriends = stories.any { it.visibility == Visibility.CLOSE_FRIENDS },
-                    isViewer = latest.authorId == viewerId,
+                    isViewer = latest.ownerType == viewer.ownerType && latest.ownerId == viewer.ownerId,
                     oldestAt = oldest.createdAt,
                     latestAt = latest.createdAt
                 )
@@ -276,26 +474,42 @@ class ContentService(
     fun storyGroup(
         viewerId: String,
         authorId: String,
+        ownerType: OwnerType = OwnerType.USER,
         startStoryId: String?,
         authorResolver: (String) -> AccountUser? = { null },
         visibilityResolver: (String) -> AccountVisibility = { ownerId -> AccountVisibility(ownerId = ownerId, viewerId = viewerId) },
         archive: Boolean = false
+    ): StoryGroup =
+        storyGroup(OwnerRef(OwnerType.USER, viewerId), authorId, ownerType, startStoryId, authorResolver, visibilityResolver, archive)
+
+    fun storyGroup(
+        viewer: OwnerRef,
+        authorId: String,
+        ownerType: OwnerType = OwnerType.USER,
+        startStoryId: String?,
+        authorResolver: (String) -> AccountUser? = { null },
+        visibilityResolver: (String) -> AccountVisibility = { ownerKey -> AccountVisibility(ownerId = ownerKey.toOwnerRef().ownerId, ownerType = ownerKey.toOwnerRef().ownerType, viewerId = viewer.ownerId, viewerType = viewer.ownerType) },
+        archive: Boolean = false
     ): StoryGroup {
         val now = Instant.now(clock)
-        val visibility = visibilityResolver(authorId)
+        val owner = OwnerRef(ownerType, authorId)
+        val ownerKey = owner.key()
+        val visibility = visibilityResolver(ownerKey)
         val rawStories = if (archive) {
-            repository.listArchivedStoriesByAuthor(authorId, now, 100)
+            repository.listArchivedStoriesByOwner(owner, now, 100, null)
         } else {
-            repository.listActiveStoriesByAuthor(authorId, now, 100)
+            repository.listActiveStoriesByOwner(owner, now, 100)
         }
-        val author = authorResolver(authorId)
+        val author = authorResolver(ownerKey)
         val stories = rawStories
             .filter { canViewStory(it, visibility, includeArchived = archive) }
             .sortedBy { it.createdAt }
-            .map { enrichStory(it, author, now, viewerId) }
+            .map { enrichStory(it, author, now, viewer) }
         return StoryGroup(
             authorId = authorId,
-            authorName = author?.username ?: if (authorId == viewerId) "You" else "User",
+            ownerType = ownerType,
+            ownerId = authorId,
+            authorName = author?.username ?: if (owner.ownerType == viewer.ownerType && owner.ownerId == viewer.ownerId) "You" else "User",
             author = author,
             avatarUrl = author?.avatarUrl,
             stories = stories,
@@ -318,10 +532,11 @@ class ContentService(
         val pageLimit = limit.coerceIn(1, 80)
         val stories = repository.listArchivedStoriesByAuthor(ownerId, now, pageLimit + 1, cursor)
             .filter { canViewStory(it, visibility, includeArchived = true) }
-            .map { enrichStory(it, author, now, visibility.viewerId) }
+            .map { enrichStory(it, author, now, visibility.viewerRef()) }
         val page = stories.take(pageLimit)
         return StoryArchiveResponse(
             ownerId = ownerId,
+            ownerType = visibility.ownerType,
             owner = author,
             stories = page,
             cursor = cursor?.toString(),
@@ -329,21 +544,27 @@ class ContentService(
         )
     }
 
-    fun recordStoryView(user: SessionUser, storyId: String): Boolean {
+    fun recordStoryView(user: SessionUser, storyId: String): Boolean =
+        recordStoryView(CurrentActor(user, user.asAccountUser()), storyId)
+
+    fun recordStoryView(actor: CurrentActor, storyId: String): Boolean {
         repository.findStory(storyId) ?: throw IllegalArgumentException("Story not found")
-        repository.recordStoryView(storyId, user.id, Instant.now(clock))
+        repository.recordStoryView(storyId, actor.activeOwner.ref(), Instant.now(clock))
         return true
     }
 
-    fun recordPostView(user: SessionUser, postId: String, durationMs: Long = 0): Boolean {
+    fun recordPostView(user: SessionUser, postId: String, durationMs: Long = 0): Boolean =
+        recordPostView(CurrentActor(user, user.asAccountUser()), postId, durationMs)
+
+    fun recordPostView(actor: CurrentActor, postId: String, durationMs: Long = 0): Boolean {
         repository.findPost(postId) ?: throw IllegalArgumentException("Post not found")
-        repository.recordPostView(postId, user.id, durationMs, Instant.now(clock))
+        repository.recordPostView(postId, actor.activeOwner.ref(), durationMs, Instant.now(clock))
         return true
     }
 
     private fun scoreRecommendation(
         post: Post,
-        viewerId: String,
+        viewer: OwnerRef,
         tagAffinity: Set<String>,
         socialGraph: AccountSocialGraph,
         now: Instant
@@ -355,8 +576,8 @@ class ContentService(
         val popularityScore = repository.countPostViews(post.id).coerceAtMost(80) * 0.04
         val ageHours = java.time.Duration.between(post.createdAt, now).toHours().coerceAtLeast(0)
         val recencyScore = 2.0 / (1 + ageHours).toDouble()
-        val ownPenalty = if (post.authorId == viewerId) -4.0 else 0.0
-        val viewerViews = repository.countPostViewsByUser(post.id, viewerId)
+        val ownPenalty = if (post.ownerType == viewer.ownerType && post.ownerId == viewer.ownerId) -4.0 else 0.0
+        val viewerViews = repository.countPostViewsByUser(post.id, viewer)
         val viewPenalty = viewerViews.coerceAtMost(5) * -1.2
         val score = tagScore + friendScore + followingScore + likeScore + popularityScore + recencyScore + ownPenalty + viewPenalty
 
@@ -447,15 +668,59 @@ class ContentService(
         if (!includeArchived && !story.expiresAt.isAfter(Instant.now(clock))) return false
         if (includeArchived && story.expiresAt.isAfter(Instant.now(clock)) && story.status != ContentStatus.ARCHIVED) return false
         if (story.status == ContentStatus.DELETED) return false
-        if (story.authorId == visibility.viewerId) return true
-        if (visibility.ownerId != story.authorId) return false
+        if (story.ownerId == visibility.viewerId && story.ownerType == visibility.viewerType) return true
+        if (visibility.ownerId != story.ownerId || visibility.ownerType != story.ownerType) return false
         return when (story.visibility) {
             Visibility.PUBLIC -> visibility.canSeePrivateContent
             Visibility.CLOSE_FRIENDS -> visibility.isCloseFriend
         }
     }
 
-    private fun enrichStory(story: Story, author: AccountUser? = story.author, now: Instant, viewerId: String? = null): Story =
+    private fun canViewPost(post: Post, visibility: AccountVisibility): Boolean {
+        if (visibility.isBlocked || post.status != ContentStatus.ACTIVE) return false
+        if (post.ownerId == visibility.viewerId && post.ownerType == visibility.viewerType) return true
+        if (visibility.ownerId != post.ownerId || visibility.ownerType != post.ownerType) return false
+        return when (post.visibility) {
+            Visibility.PUBLIC -> visibility.canSeePrivateContent
+            Visibility.CLOSE_FRIENDS -> visibility.isCloseFriend
+        }
+    }
+
+    private fun canViewCollection(collection: SavedCollection, visibility: AccountVisibility): Boolean {
+        if (visibility.isBlocked || !visibility.canSeePrivateContent) return false
+        if (collection.ownerId != visibility.ownerId || collection.ownerType != visibility.ownerType) return false
+        val owner = collection.ownerId == visibility.viewerId && collection.ownerType == visibility.viewerType
+        return owner || collection.visibility == CollectionVisibility.PUBLIC
+    }
+
+    private fun enrichCollectionForViewer(collection: SavedCollection, visibilityResolver: (String) -> AccountVisibility): SavedCollection {
+        val posts = repository.listCollectionPosts(collection.id, 500)
+            .filter { canViewPost(it, visibilityResolver(it.ownerRef().key())) }
+        return collection.copy(
+            itemCount = posts.size,
+            previewBlocks = previewBlocks(posts)
+        )
+    }
+
+    private fun previewBlocks(posts: List<Post>): List<ContentBlock> =
+        posts.flatMap { post ->
+            post.blocks.filter { it.type == ContentBlockType.IMAGE || it.type == ContentBlockType.VIDEO }
+        }.take(3)
+
+    private fun normalizeCollectionTitle(title: String): String {
+        val normalized = title.trim()
+        require(normalized.isNotBlank()) { "Collection title is required" }
+        return normalized.take(80)
+    }
+
+    private fun normalizeCollectionDescription(description: String?): String? =
+        description?.trim()?.takeIf(String::isNotBlank)?.take(280)
+
+    private fun requireOwnsCollection(owner: OwnerRef, collection: SavedCollection) {
+        require(collection.ownerType == owner.ownerType && collection.ownerId == owner.ownerId) { "Collection not found" }
+    }
+
+    private fun enrichStory(story: Story, author: AccountUser? = story.author, now: Instant, viewer: OwnerRef? = null): Story =
         story.copy(
             author = author,
             durationMs = storyDurationMs(story.blocks),
@@ -463,7 +728,7 @@ class ContentService(
             closeFriends = story.visibility == Visibility.CLOSE_FRIENDS,
             archived = story.status == ContentStatus.ARCHIVED || !story.expiresAt.isAfter(now),
             likeCount = repository.countStoryLikes(story.id),
-            likedByViewer = viewerId?.let { repository.isStoryLikedBy(story.id, it) } ?: false,
+            likedByViewer = viewer?.let { repository.isStoryLikedBy(story.id, it) } ?: false,
             remainingLifeSeconds = if (story.expiresAt.isAfter(now)) java.time.Duration.between(now, story.expiresAt).seconds else 0
         )
 
@@ -504,27 +769,29 @@ class ContentService(
         (this[key] as? JsonPrimitive)?.longOrNull
             ?: (this[key] as? JsonPrimitive)?.contentOrNull?.toLongOrNull()
 
-    private fun SessionUser.asAccountUser(): AccountUser =
-        AccountUser(id = id, username = username, firstName = firstName, lastName = lastName, avatarUrl = avatarUrl)
+private fun SessionUser.asAccountUser(): AccountUser =
+    AccountUser(id = id, ownerType = OwnerType.USER, username = username, displayName = listOfNotNull(firstName, lastName).joinToString(" ").ifBlank { username }, firstName = firstName, lastName = lastName, avatarUrl = avatarUrl)
 
-    private fun withViewerState(post: Post, viewerId: String?): Post =
+private fun AccountOwner.ref(): OwnerRef = OwnerRef(ownerType = ownerType, ownerId = id)
+
+    private fun withViewerState(post: Post, viewer: OwnerRef?): Post =
         post.copy(
             likeCount = repository.countPostLikes(post.id),
-            likedByViewer = viewerId?.let { repository.isPostLikedBy(post.id, it) } ?: false
+            likedByViewer = viewer?.let { repository.isPostLikedBy(post.id, it) } ?: false
         )
 
     private fun withAuthor(post: Post, authorResolver: (String) -> AccountUser?): Post =
-        post.copy(author = post.author ?: authorResolver(post.authorId))
+        post.copy(author = post.author ?: authorResolver(post.ownerKey()))
 
     private fun withCommentViewerState(
         comment: Comment,
-        viewerId: String?,
+        viewer: OwnerRef?,
         authorResolver: (String) -> AccountUser?
     ): Comment =
         comment.copy(
-            author = comment.author ?: authorResolver(comment.authorId),
+            author = comment.author ?: authorResolver(comment.ownerKey()),
             likeCount = repository.countCommentLikes(comment.id),
-            likedByViewer = viewerId?.let { repository.isCommentLikedBy(comment.id, it) } ?: false,
+            likedByViewer = viewer?.let { repository.isCommentLikedBy(comment.id, it) } ?: false,
             blocks = comment.blocks.ifEmpty { if (comment.text.isBlank()) emptyList() else listOf(textBlock(comment.text)) }
         )
 
@@ -535,3 +802,29 @@ class ContentService(
         private const val EXPLORATION_INTERVAL = 8
     }
 }
+
+private fun Post.ownerKey(): String =
+    if (ownerType == OwnerType.USER) ownerId else "${ownerType.name}:$ownerId"
+
+private fun Post.ownerRef(): OwnerRef =
+    OwnerRef(ownerType, ownerId)
+
+private fun Comment.ownerKey(): String =
+    if (ownerType == OwnerType.USER) ownerId else "${ownerType.name}:$ownerId"
+
+private fun Story.ownerKey(): String =
+    if (ownerType == OwnerType.USER) ownerId else "${ownerType.name}:$ownerId"
+
+private fun OwnerRef.key(): String =
+    if (ownerType == OwnerType.USER) ownerId else "${ownerType.name}:$ownerId"
+
+private fun SavedCollection.ownerRef(): OwnerRef =
+    OwnerRef(ownerType, ownerId)
+
+private fun String.toOwnerRef(): OwnerRef {
+    val parts = split(":", limit = 2)
+    return if (parts.size == 2) OwnerRef(OwnerType.valueOf(parts[0]), parts[1]) else OwnerRef(OwnerType.USER, this)
+}
+
+private fun AccountVisibility.viewerRef(): OwnerRef? =
+    viewerId?.let { OwnerRef(viewerType, it) }

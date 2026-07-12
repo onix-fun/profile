@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { useToast } from "primevue/usetoast";
 import { ContentService } from "@/api/contentService";
-import type { CommentItem, ContentBlock, FeedItem } from "@/api/types";
+import type { AccountUser, CommentItem, ContentBlock, CurrentActor, FeedItem } from "@/api/types";
 import ContentDocument from "@/features/contentDocument/ContentDocument.vue";
 import ContentEditor from "@/features/contentDocument/ContentEditor.vue";
 import {
@@ -15,6 +15,7 @@ import {
 const route = useRoute();
 const router = useRouter();
 const toast = useToast();
+const currentActor = ref<CurrentActor | null>(null);
 const post = ref<FeedItem["post"] | null>(null);
 const comments = ref<CommentItem[]>([]);
 const commentMarkdown = ref("");
@@ -23,6 +24,10 @@ const isLoading = ref(true);
 const isTogglingLike = ref(false);
 const isSendingComment = ref(false);
 const commentsOpen = ref(true);
+
+const activeOwner = computed<AccountUser | null>(() => currentActor.value?.activeOwner ?? null);
+const activeOwnerName = computed(() => activeOwner.value?.username || "User");
+const activeOwnerInitial = computed(() => activeOwnerName.value.slice(0, 1).toUpperCase());
 
 const postId = computed(() => String(route.params.postId || ""));
 const allowComments = computed(() => post.value?.allowComments !== false);
@@ -37,7 +42,10 @@ const authorInitial = computed(() => authorName.value.slice(0, 1).toUpperCase())
 const sortedComments = computed(() => [...comments.value].sort((a, b) => Date.parse(a.createdAt || "") - Date.parse(b.createdAt || "")));
 
 onMounted(async () => {
-  await loadPost();
+  await Promise.all([
+    loadPost(),
+    ContentService.currentActor().then((a) => (currentActor.value = a)).catch(() => undefined),
+  ]);
   void ContentService.recordView(postId.value, 0).catch(() => undefined);
 });
 
@@ -73,6 +81,11 @@ function commentAuthor(comment: CommentItem) {
 
 function commentAuthorName(comment: CommentItem): string {
   return commentAuthor(comment)?.username || comment.authorName || "user";
+}
+
+function ownerPath(owner?: { ownerType?: string; username?: string | null } | null, fallbackName?: string | null) {
+  const username = owner?.username || fallbackName || "user";
+  return `/${owner?.ownerType === "ORGANIZATION" ? "o" : "u"}/${encodeURIComponent(username)}`;
 }
 
 function commentMarkdownValue(comment: CommentItem): string {
@@ -167,12 +180,12 @@ async function sendComment() {
 
       <aside class="comments-panel" :class="{ open: commentsOpen }" aria-label="Post details and comments">
         <header class="author-card">
-          <RouterLink class="author-card__avatar" :to="`/u/${authorName}`">
+          <RouterLink class="author-card__avatar" :to="ownerPath(author, authorName)">
             <img v-if="author?.avatarUrl" :src="author.avatarUrl" alt="" />
             <span v-else>{{ authorInitial }}</span>
           </RouterLink>
           <div>
-            <RouterLink :to="`/u/${authorName}`">{{ author?.firstName || authorName }}</RouterLink>
+            <RouterLink :to="ownerPath(author, authorName)">{{ author?.displayName || author?.firstName || authorName }}</RouterLink>
             <span>@{{ authorName }}</span>
           </div>
           <button type="button" aria-label="Toggle comments" @click="commentsOpen = !commentsOpen">
@@ -192,6 +205,14 @@ async function sendComment() {
         </section>
 
         <section class="comment-composer">
+          <div class="comment-composer__identity">
+            <span class="comment-composer__avatar">
+              <img v-if="activeOwner?.avatarUrl" :src="activeOwner.avatarUrl" alt="" />
+              <i v-else-if="activeOwner?.ownerType === 'ORGANIZATION'" class="pi pi-building"></i>
+              <span v-else>{{ activeOwnerInitial }}</span>
+            </span>
+            <span class="comment-composer__name">{{ activeOwner?.displayName || activeOwnerName }}</span>
+          </div>
           <ContentEditor
             v-if="allowComments"
             v-model="commentMarkdown"
@@ -209,13 +230,13 @@ async function sendComment() {
 
         <section class="comment-list">
           <article v-for="comment in sortedComments" :key="comment.id" class="comment-item">
-            <RouterLink class="comment-item__avatar" :to="`/u/${commentAuthorName(comment)}`">
+            <RouterLink class="comment-item__avatar" :to="ownerPath(commentAuthor(comment), commentAuthorName(comment))">
               <img v-if="commentAuthor(comment)?.avatarUrl" :src="commentAuthor(comment)?.avatarUrl || ''" alt="" />
               <span v-else>{{ commentAuthorName(comment).slice(0, 1).toUpperCase() }}</span>
             </RouterLink>
             <div class="comment-item__body">
               <header>
-                <RouterLink :to="`/u/${commentAuthorName(comment)}`">{{ commentAuthor(comment)?.firstName || commentAuthorName(comment) }}</RouterLink>
+                <RouterLink :to="ownerPath(commentAuthor(comment), commentAuthorName(comment))">{{ commentAuthor(comment)?.displayName || commentAuthor(comment)?.firstName || commentAuthorName(comment) }}</RouterLink>
                 <span>@{{ commentAuthorName(comment) }}</span>
                 <time>{{ relativeTime(comment.createdAt) }}</time>
                 <button type="button" class="comment-menu" title="Comment menu">
@@ -384,6 +405,38 @@ async function sendComment() {
   gap: 10px;
   border-top: 1px solid rgba(15, 23, 42, 0.08);
   padding-top: 14px;
+}
+
+.comment-composer__identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.comment-composer__avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: #111827;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 900;
+  flex-shrink: 0;
+}
+
+.comment-composer__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.comment-composer__name {
+  font-size: 12px;
+  font-weight: 900;
+  color: #475569;
 }
 
 .send-comment {
