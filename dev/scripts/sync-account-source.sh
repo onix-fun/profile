@@ -4,7 +4,7 @@ set -eu
 repo_url="${ACCOUNT_REPOSITORY_URL:-https://github.com/onix-fun/account.git}"
 ref="${ACCOUNT_REPOSITORY_REF:-codex/account-organizations}"
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-target_dir="$script_dir/../account-src"
+target_dir="$script_dir/../../account"
 patch_dir="$script_dir/../account-patches"
 
 if [ -d "$target_dir/.git" ]; then

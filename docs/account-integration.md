@@ -1,6 +1,6 @@
 # Account Integration
 
-Profile Service depends on Account as the source of users, privacy, sessions, and follow relationships.
+Profile and Content depend on Account as the source of users, privacy, sessions, active owners, and follow relationships.
 
 ## Required Account Settings
 
@@ -9,16 +9,16 @@ When Account and Profile run behind one Caddy proxy on sibling subdomains, Accou
 ```env
 ACCOUNT_HTTP_COOKIE_SECURE=true
 ACCOUNT_HTTP_COOKIE_DOMAIN=.onix.fun
-ACCOUNT_HTTP_ALLOWED_ORIGINS=https://account.onix.fun,https://profile.onix.fun
+ACCOUNT_HTTP_ALLOWED_ORIGINS=https://account.onix.fun,https://profile.onix.fun,https://content.onix.fun
 ```
 
-The Account frontend runtime config must trust profile redirects:
+The Account frontend runtime config must trust service frontend redirects:
 
 ```js
 window.__ACCOUNT_CONFIG__ = {
   apiBaseUrl: "/api",
   frontendBasePath: "/",
-  trustedRedirectOrigins: ["https://profile.onix.fun"]
+  trustedRedirectOrigins: ["https://profile.onix.fun", "https://content.onix.fun"]
 };
 ```
 
@@ -34,7 +34,7 @@ private fun browserCookieName(name: String): String {
 }
 ```
 
-With `ACCOUNT_HTTP_COOKIE_DOMAIN=.onix.fun`, Profile Service will receive `access_token` and forward it to Account API as `Authorization: Bearer <token>`.
+With `ACCOUNT_HTTP_COOKIE_DOMAIN=.onix.fun`, Profile and Content receive `access_token` and forward it to Account API as `Authorization: Bearer <token>`.
 
 ## Required Account Internal gRPC API
 

@@ -1,0 +1,9 @@
+:root {
+  --onix-color-text: #111827;
+  --onix-color-muted: #64748b;
+  --onix-color-surface: #ffffff;
+  --onix-color-surface-muted: #f1f5f9;
+  --onix-color-accent: #0f766e;
+  --onix-radius-control: 8px;
+  --onix-shadow-floating: 0 18px 54px rgba(15, 23, 42, 0.16);
+}

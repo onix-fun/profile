@@ -1,0 +1,214 @@
+syntax = "proto3";
+
+package onix.provider.v1;
+
+option java_multiple_files = true;
+option java_package = "com.onix.provider.v1";
+
+service UnifiedProvider {
+  rpc ResolveItems(ResolveItemsRequest) returns (ResolveItemsResponse);
+  rpc ListOwnerSection(OwnerSectionRequest) returns (OwnerSectionResponse);
+  rpc Search(SearchRequest) returns (SearchResponse);
+  rpc Suggest(SuggestRequest) returns (SuggestResponse);
+  rpc PerformAction(ProviderActionRequest) returns (ProviderActionResponse);
+}
+
+message OwnerRef {
+  string owner_type = 1;
+  string owner_id = 2;
+}
+
+message ItemRef {
+  string service_key = 1;
+  string item_type = 2;
+  string item_id = 3;
+}
+
+message ContentBlock {
+  string id = 1;
+  string type = 2;
+  string data_json = 3;
+}
+
+message OwnerSummary {
+  string id = 1;
+  string owner_type = 2;
+  string username = 3;
+  string display_name = 4;
+  string first_name = 5;
+  string last_name = 6;
+  string avatar_url = 7;
+}
+
+message PostCard {
+  string id = 1;
+  string author_id = 2;
+  string owner_type = 3;
+  string owner_id = 4;
+  OwnerSummary author = 5;
+  string title = 6;
+  string text = 7;
+  repeated string tags = 8;
+  string created_at = 9;
+  int64 like_count = 10;
+  bool liked_by_viewer = 11;
+  repeated ContentBlock blocks = 12;
+}
+
+message StoryCard {
+  string id = 1;
+  string author_id = 2;
+  string owner_type = 3;
+  string owner_id = 4;
+  OwnerSummary author = 5;
+  string visibility = 6;
+  repeated ContentBlock blocks = 7;
+  int64 duration_ms = 8;
+  int64 media_duration_ms = 9;
+  bool close_friends = 10;
+  bool archived = 11;
+  int64 like_count = 12;
+  bool liked_by_viewer = 13;
+  int64 remaining_life_seconds = 14;
+  string created_at = 15;
+  string expires_at = 16;
+}
+
+message ItemView {
+  ItemRef ref = 1;
+  string title = 2;
+  string text = 3;
+  repeated ContentBlock preview_blocks = 4;
+  string url = 5;
+  string created_at = 6;
+  OwnerSummary owner = 7;
+  PostCard post = 8;
+  StoryCard story = 9;
+  map<string, string> meta = 10;
+}
+
+message ResolveItemsRequest {
+  string service_key = 1;
+  string capability_key = 2;
+  repeated ItemRef refs = 3;
+  OwnerRef viewer = 4;
+  int32 limit = 5;
+  map<string, string> params = 6;
+}
+
+message ResolveItemsResponse {
+  repeated ItemView items = 1;
+  repeated string partial_errors = 2;
+}
+
+message OwnerSectionRequest {
+  string service_key = 1;
+  string capability_key = 2;
+  OwnerRef owner = 3;
+  OwnerRef viewer = 4;
+  int32 limit = 5;
+  string cursor = 6;
+  map<string, string> params = 7;
+}
+
+message OwnerSectionResponse {
+  repeated ItemView items = 1;
+  repeated PostCard posts = 2;
+  repeated StoryCard stories = 3;
+  string next_cursor = 4;
+  repeated string partial_errors = 5;
+}
+
+message SearchRequest {
+  string service_key = 1;
+  string capability_key = 2;
+  string query = 3;
+  repeated string types = 4;
+  repeated string tags = 5;
+  string author = 6;
+  string date_from = 7;
+  string date_to = 8;
+  string sort = 9;
+  int32 limit = 10;
+  string cursor = 11;
+  OwnerRef viewer = 12;
+  map<string, string> params = 13;
+}
+
+message SearchResponse {
+  repeated SearchItem items = 1;
+  string next_cursor = 2;
+  repeated string partial_errors = 3;
+  repeated SearchFacet facets = 4;
+  repeated ProviderStatus provider_statuses = 5;
+}
+
+message SearchItem {
+  string type = 1;
+  string id = 2;
+  string title = 3;
+  string snippet = 4;
+  OwnerSummary owner = 5;
+  string url = 6;
+  double score = 7;
+  string created_at = 8;
+  string post_id = 9;
+  string comment_id = 10;
+  repeated string tags = 11;
+  map<string, string> meta = 12;
+  string provider_key = 13;
+  string provider_label = 14;
+  string type_label = 15;
+  string thumbnail_url = 16;
+  repeated string highlights = 17;
+}
+
+message SearchFacet {
+  string group = 1;
+  string value = 2;
+  string label = 3;
+  int32 count = 4;
+  bool selected = 5;
+}
+
+message ProviderStatus {
+  string provider_key = 1;
+  string label = 2;
+  string status = 3;
+  string message = 4;
+}
+
+message SuggestRequest {
+  string service_key = 1;
+  string capability_key = 2;
+  string query = 3;
+  int32 limit = 4;
+  OwnerRef viewer = 5;
+  map<string, string> params = 6;
+}
+
+message SuggestResponse {
+  repeated SearchSuggestion suggestions = 1;
+  repeated string partial_errors = 2;
+}
+
+message SearchSuggestion {
+  string type = 1;
+  string value = 2;
+  string label = 3;
+}
+
+message ProviderActionRequest {
+  string service_key = 1;
+  string capability_key = 2;
+  OwnerRef actor = 3;
+  OwnerRef viewer = 4;
+  ItemRef ref = 5;
+  map<string, string> params = 6;
+}
+
+message ProviderActionResponse {
+  string result_json = 1;
+  repeated string partial_errors = 2;
+  map<string, string> meta = 3;
+}

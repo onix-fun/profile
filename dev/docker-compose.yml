@@ -1,4 +1,4 @@
-name: profile-service
+name: onix-local
 
 x-account-env: &account-env
   ACCOUNT_ENV: development
@@ -22,20 +22,20 @@ x-account-env: &account-env
   ACCOUNT_JWT_PUBLIC_KEY_FILE: /run/secrets/account-jwt-public.pem
   ACCOUNT_SECURITY_OTP_HMAC_SECRET: ${ACCOUNT_SECURITY_OTP_HMAC_SECRET:-dev-hmac-secret-at-least-32-chars}
   ACCOUNT_SECURITY_INTERNAL_AUTH_SECRET: ${ACCOUNT_SECURITY_INTERNAL_AUTH_SECRET:-dev-internal-secret-at-least-32-chars}
-  ACCOUNT_HTTP_ALLOWED_ORIGINS: http://profile.localhost:8088
-  ACCOUNT_HTTP_COOKIE_DOMAIN: ${ACCOUNT_HTTP_COOKIE_DOMAIN:-}
+  ACCOUNT_HTTP_ALLOWED_ORIGINS: http://account.onix.localhost:8088,http://profile.onix.localhost:8088,http://content.onix.localhost:8088
+  ACCOUNT_HTTP_COOKIE_DOMAIN: ${ACCOUNT_HTTP_COOKIE_DOMAIN:-.onix.localhost}
   ACCOUNT_HTTP_COOKIE_SECURE: "false"
   ACCOUNT_API_BASE_URL: /api
-  ACCOUNT_FRONTEND_BASE_PATH: /account/
-  ACCOUNT_TRUSTED_REDIRECT_ORIGINS: http://profile.localhost:8088
+  ACCOUNT_FRONTEND_BASE_PATH: /
+  ACCOUNT_TRUSTED_REDIRECT_ORIGINS: http://profile.onix.localhost:8088,http://content.onix.localhost:8088
   ACCOUNT_GRPC_ENABLED: "true"
   ACCOUNT_GRPC_PORT: "9097"
 
 x-account-build: &account-build
-  context: ./account-src
-  dockerfile: ../account.Dockerfile
+  context: ../account
+  dockerfile: Dockerfile.local
   additional_contexts:
-    onix-design-system: ${ONIX_DESIGN_SYSTEM_CONTEXT:-../../onix-design-system}
+    onix-design-system: ${ONIX_DESIGN_SYSTEM_CONTEXT:-../design-system}
 
 services:
   caddy:
@@ -46,9 +46,10 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
     depends_on:
       - account
-      - profile-service
-      - content-service
+      - profile-backend
+      - content-backend
       - profile-frontend
+      - content-frontend
 
   account-migrate:
     image: ${ACCOUNT_IMAGE:-profile-service-account:dev}
@@ -68,67 +69,96 @@ services:
     volumes:
       - ./secrets/account-jwt-private.pem:/run/secrets/account-jwt-private.pem:ro
       - ./secrets/account-jwt-public.pem:/run/secrets/account-jwt-public.pem:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8081/health >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
     depends_on:
       account-migrate: { condition: service_completed_successfully }
       account-redis: { condition: service_healthy }
       s3-init: { condition: service_completed_successfully }
       mail: { condition: service_started }
 
-  profile-service:
+  profile-backend:
     build:
       context: ..
-      dockerfile: profile-service/Dockerfile
+      dockerfile: profile/backend/Dockerfile
     environment:
       PROFILE_HTTP_PORT: "8080"
       PROFILE_ACCOUNT_GRPC_URL: account:9097
       PROFILE_ACCOUNT_GRPC_TLS: "false"
-      PROFILE_ACCOUNT_FRONTEND_URL: http://profile.localhost:8088/account
-      PROFILE_PUBLIC_URL: http://profile.localhost:8088
-      PROFILE_ALLOWED_ORIGINS: http://profile.localhost:8088
-      PROFILE_CONTENT_API_URL: http://content-service:8080/internal/profile
-      PROFILE_CONTENT_GRPC_URL: content-service:9091
+      PROFILE_ACCOUNT_FRONTEND_URL: http://account.onix.localhost:8088
+      PROFILE_PUBLIC_URL: http://profile.onix.localhost:8088
+      PROFILE_ALLOWED_ORIGINS: http://profile.onix.localhost:8088,http://content.onix.localhost:8088
+      PROFILE_TRUSTED_REDIRECT_ORIGINS: http://profile.onix.localhost:8088,http://content.onix.localhost:8088
+      PROFILE_CONTENT_GRPC_URL: content-backend:9091
+      PROFILE_PROVIDER_CONTENT_GRPC_URL: content-backend:9091
+      PROFILE_GRPC_PORT: "9092"
+      PROFILE_DATABASE_JDBC_URL: jdbc:postgresql://profile-postgres:5432/profile
+      PROFILE_DATABASE_USERNAME: profile
+      PROFILE_DATABASE_PASSWORD: ${PROFILE_DATABASE_PASSWORD:-profile}
     depends_on:
-      account: { condition: service_started }
-      content-service: { condition: service_started }
+      account: { condition: service_healthy }
+      content-backend: { condition: service_started }
+      profile-postgres: { condition: service_healthy }
 
-  content-service:
+  content-backend:
     build:
       context: ..
-      dockerfile: content-service/Dockerfile
+      dockerfile: content/backend/Dockerfile
     environment:
       CONTENT_HTTP_PORT: "8080"
       CONTENT_GRPC_PORT: "9091"
-      CONTENT_ALLOWED_ORIGINS: http://profile.localhost:8088
+      CONTENT_ALLOWED_ORIGINS: http://content.onix.localhost:8088,http://profile.onix.localhost:8088
       CONTENT_ACCOUNT_GRPC_URL: account:9097
       CONTENT_ACCOUNT_GRPC_TLS: "false"
-      CONTENT_MEDIA_API_URL: http://media-service:8080
-      CONTENT_SEARCH_API_URL: http://search-service:8080
+      CONTENT_MEDIA_GRPC_URL: media-service:9093
+      CONTENT_MEDIA_GRPC_TLS: "false"
+      CONTENT_SEARCH_GRPC_URL: search-service:9094
+      CONTENT_SEARCH_GRPC_TLS: "false"
       CONTENT_DATABASE_JDBC_URL: jdbc:postgresql://content-postgres:5432/content
       CONTENT_DATABASE_USERNAME: content
       CONTENT_DATABASE_PASSWORD: ${CONTENT_DATABASE_PASSWORD:-content}
       CONTENT_CLICKHOUSE_URL: jdbc:clickhouse://clickhouse:8123/default
-      CONTENT_RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
       CONTENT_MEDIA_API_KEY: ${CONTENT_MEDIA_API_KEY:-development-media-secret}
       CONTENT_SEARCH_API_KEY: ${CONTENT_SEARCH_API_KEY:-development-search-secret}
       CONTENT_INTERNAL_AUTH_SECRET: ${CONTENT_INTERNAL_AUTH_SECRET:-development-content-secret}
+      CONTENT_PROFILE_USAGE_GRPC_URL: profile-backend:9092
     depends_on:
+      account: { condition: service_healthy }
       content-postgres: { condition: service_healthy }
       clickhouse: { condition: service_started }
-      rabbitmq: { condition: service_healthy }
       media-service: { condition: service_started }
-      search-service: { condition: service_started }
+      search-service: { condition: service_healthy }
 
   profile-frontend:
     build:
       context: ..
-      dockerfile: frontend/Dockerfile
+      dockerfile: profile/frontend/Dockerfile
     environment:
       PROFILE_API_BASE_URL: /api
       PROFILE_FRONTEND_BASE_PATH: /
-      PROFILE_ACCOUNT_FRONTEND_URL: http://profile.localhost:8088/account
+      PROFILE_ACCOUNT_FRONTEND_URL: http://account.onix.localhost:8088
+      PROFILE_CONTENT_FRONTEND_URL: http://content.onix.localhost:8088
     depends_on:
-      - profile-service
-      - content-service
+      - profile-backend
+      - content-backend
+
+  content-frontend:
+    build:
+      context: ..
+      dockerfile: content/frontend/Dockerfile
+    environment:
+      CONTENT_API_BASE_URL: /api
+      CONTENT_GRAPHQL_URL: /graphql
+      CONTENT_SUBSCRIPTIONS_URL: /subscriptions
+      CONTENT_FRONTEND_BASE_PATH: /
+      CONTENT_ACCOUNT_FRONTEND_URL: http://account.onix.localhost:8088
+      CONTENT_PROFILE_FRONTEND_URL: http://profile.onix.localhost:8088
+    depends_on:
+      - content-backend
 
   content-postgres:
     image: postgres:18-alpine
@@ -144,22 +174,24 @@ services:
       timeout: 3s
       retries: 10
 
+  profile-postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: profile
+      POSTGRES_USER: profile
+      POSTGRES_PASSWORD: ${PROFILE_DATABASE_PASSWORD:-profile}
+    volumes:
+      - profile_postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U profile -d profile"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   clickhouse:
     image: clickhouse/clickhouse-server:25.11-alpine
     volumes:
       - content_clickhouse:/var/lib/clickhouse
-
-  rabbitmq:
-    image: rabbitmq:4-alpine
-    environment:
-      RABBITMQ_ERLANG_COOKIE: ${RABBITMQ_ERLANG_COOKIE:-profile-service-dev-cookie}
-    volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "check_running"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
 
   media-postgres:
     image: postgres:15-alpine
@@ -200,20 +232,20 @@ services:
       - media-minio
 
   media-service:
-    image: ghcr.io/onix-fun/media-service:latest
+    build:
+      context: ../media-service
+      dockerfile: Dockerfile
     command: ["serve", "--config=/config/media.config.yaml"]
     environment:
       MEDIA_API_KEY: ${CONTENT_MEDIA_API_KEY:-development-media-secret}
       MEDIA_DATABASE_URL: postgres://media:${MEDIA_DATABASE_PASSWORD:-media}@media-postgres:5432/media?sslmode=disable
       S3_ACCESS_KEY: ${MEDIA_S3_ACCESS_KEY:-media}
       S3_SECRET_KEY: ${MEDIA_S3_SECRET_KEY:-media-secret}
-      MEDIA_RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
     volumes:
       - ./media.config.yaml:/config/media.config.yaml:ro
     depends_on:
       media-postgres: { condition: service_healthy }
       media-minio-init: { condition: service_completed_successfully }
-      rabbitmq: { condition: service_healthy }
 
   search-redis:
     image: redis:8.2.6-alpine
@@ -236,15 +268,38 @@ services:
     volumes:
       - search_meili:/meili_data
 
+  search-postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: search
+      POSTGRES_USER: search
+      POSTGRES_PASSWORD: ${SEARCH_DATABASE_PASSWORD:-search}
+    volumes:
+      - search_postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U search -d search"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   search-service:
-    image: ghcr.io/onix-fun/search-service:latest
+    build:
+      context: ../search-service
+      dockerfile: Dockerfile
     command: ["serve", "--role=all", "--config=config/config.example.yaml"]
     environment:
       SEARCH_API_KEY: ${CONTENT_SEARCH_API_KEY:-development-search-secret}
+      SEARCH_DATABASE_URL: postgres://search:${SEARCH_DATABASE_PASSWORD:-search}@search-postgres:5432/search?sslmode=disable
     depends_on:
       search-redis: { condition: service_healthy }
-      rabbitmq: { condition: service_healthy }
+      search-postgres: { condition: service_healthy }
       meilisearch: { condition: service_started }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/readyz >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
 
   account-postgres:
     image: postgres:18-alpine
@@ -294,16 +349,17 @@ services:
   mail:
     image: mailhog/mailhog:v1.0.1
     ports:
-      - "${MAILHOG_HTTP_PORT:-8027}:8025"
+      - "${MAILHOG_HTTP_PORT:-8028}:8025"
 
 volumes:
   account_postgres:
   account_redis:
   account_s3:
+  profile_postgres:
   content_postgres:
   content_clickhouse:
   media_postgres:
   media_minio:
-  rabbitmq_data:
   search_redis:
+  search_postgres:
   search_meili:

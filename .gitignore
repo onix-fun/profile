@@ -1,19 +1,22 @@
 .DS_Store
 
 # Frontend
-frontend/node_modules/
-frontend/dist/
-frontend/*.tsbuildinfo
+profile/frontend/node_modules/
+profile/frontend/dist/
+profile/frontend/*.tsbuildinfo
+content/frontend/node_modules/
+content/frontend/dist/
+content/frontend/*.tsbuildinfo
 
 # Kotlin / Gradle
-profile-service/build/
-profile-service/.gradle/
-profile-service/.kotlin/
-content-service/build/
-content-service/.gradle/
-content-service/.kotlin/
+profile/backend/build/
+profile/backend/.gradle/
+profile/backend/.kotlin/
+content/backend/build/
+content/backend/.gradle/
+content/backend/.kotlin/
 
 # Local development
+account/
 dev/.env
 dev/secrets/
-dev/account-src/

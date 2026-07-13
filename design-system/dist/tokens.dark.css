@@ -1,0 +1,32 @@
+:root.dark {
+  color-scheme: dark;
+
+  --bg: #0f141a;
+  --bg-grid: rgba(226, 232, 240, 0.055);
+  --surface: #19212a;
+  --surface-muted: #111820;
+  --surface-soft: #151d26;
+  --surface-raised: #1e2731;
+  --surface-active: #26313d;
+  --surface-strong: #313d49;
+  --text: #f5f7fa;
+  --muted: #a5afbc;
+  --subtle: #6f7b89;
+  --accent: #f5f7fa;
+  --focus-ring: rgba(245, 247, 250, 0.18);
+  --success: #61c979;
+  --success-soft: rgba(97, 201, 121, 0.14);
+  --info: #5d9bff;
+  --info-soft: rgba(93, 155, 255, 0.14);
+  --warning: #f1a92f;
+  --warning-soft: rgba(241, 169, 47, 0.16);
+  --danger: #ff6b63;
+  --danger-soft: rgba(255, 107, 99, 0.14);
+  --pink: #ff6caf;
+  --cyan: #38c6df;
+  --shadow-sm: 0 8px 22px rgba(0, 0, 0, 0.24);
+  --shadow: 0 22px 60px rgba(0, 0, 0, 0.36);
+  --shadow-strong: 0 28px 76px rgba(0, 0, 0, 0.44);
+  --btn-primary-bg: #f5f7fa;
+  --btn-primary-text: #111820;
+}

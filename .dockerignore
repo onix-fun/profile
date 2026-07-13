@@ -1,21 +1,21 @@
 .git
 .DS_Store
 
-frontend/node_modules
-frontend/dist
-frontend/*.tsbuildinfo
+account
 
-backend/build
-backend/.gradle
-backend/.kotlin
+profile/frontend/node_modules
+profile/frontend/dist
+profile/frontend/*.tsbuildinfo
+
+content/frontend/node_modules
+content/frontend/dist
+content/frontend/*.tsbuildinfo
+
+profile/backend/.gradle
+profile/backend/.kotlin
+
+content/backend/.gradle
+content/backend/.kotlin
 
 dev/.env
 dev/secrets
-dev/account-src
-!dev/account-src/
-dev/account-src/**
-!dev/account-src/backend/
-!dev/account-src/backend/src/
-!dev/account-src/backend/src/main/
-!dev/account-src/backend/src/main/proto/
-!dev/account-src/backend/src/main/proto/**

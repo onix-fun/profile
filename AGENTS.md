@@ -4,9 +4,11 @@
 
 This repository contains Profile and Content services over Account. Keep frontend, backend services, dev topology, and documentation separate:
 
-- `profile-service/` for Kotlin/Ktor Profile API code, Account adapter, Content adapter, and Profile tests.
-- `content-service/` for Kotlin/Ktor Content API code, persistence, Account/Media/Search adapters, and Content tests.
-- `frontend/` for Vue 3, PrimeVue, deterministic canvas UI, and frontend tests.
+- `profile/backend/` for Kotlin/Ktor Profile API code, Account adapter, Content adapter, and Profile tests.
+- `profile/frontend/` for Vue 3 Profile/Search UI and frontend tests.
+- `content/backend/` for Kotlin/Ktor Content API code, persistence, Account/Media/Search adapters, and Content tests.
+- `content/frontend/` for Vue 3 Feed/Post/Story UI and frontend tests.
+- `design-system/` for the `@onix/design-system` token/docs package.
 - `dev/` for local Caddy, Docker Compose topology, and generated dev secrets.
 - `docs/` for integration notes and operational decisions.
 
@@ -14,11 +16,14 @@ Avoid committing generated build outputs, local caches, secrets, or editor-speci
 
 ## Build, Test, and Development Commands
 
-- `cd frontend && npm install`: install frontend dependencies.
-- `cd frontend && npm run test`: run Vitest unit tests.
-- `cd frontend && npm run build`: typecheck and build the Vue app.
-- `cd profile-service && JAVA_HOME=<jdk21> gradle --no-daemon test`: compile and test Profile backend.
-- `cd content-service && JAVA_HOME=<jdk21> gradle --no-daemon test`: compile and test Content backend.
+- `cd profile/frontend && npm install`: install Profile frontend dependencies.
+- `cd profile/frontend && npm run test`: run Profile frontend Vitest tests.
+- `cd profile/frontend && npm run build`: typecheck and build the Profile Vue app.
+- `cd content/frontend && npm install`: install Content frontend dependencies.
+- `cd content/frontend && npm run test`: run Content frontend Vitest tests.
+- `cd content/frontend && npm run build`: typecheck and build the Content Vue app.
+- `cd profile/backend && JAVA_HOME=<jdk21> gradle --no-daemon test`: compile and test Profile backend.
+- `cd content/backend && JAVA_HOME=<jdk21> gradle --no-daemon test`: compile and test Content backend.
 - `make dev`: generate local Account JWT keys and start the full Caddy/Account/Profile stack.
 - `make compose-config`: validate the local Docker Compose topology.
 

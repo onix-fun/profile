@@ -4,33 +4,49 @@ DEV_ENV ?= dev/.env
 SHELL := /bin/zsh
 .SHELLFLAGS := -lc
 
-.PHONY: dev dev-account-source dev-env dev-keys frontend-install frontend-test frontend-build profile-test profile-build content-test content-build account-build backend-test backend-build compose-config compose-down
+.PHONY: dev dev-account-source dev-env dev-keys profile-frontend-install profile-frontend-test profile-frontend-build content-frontend-install content-frontend-test content-frontend-build design-system-build profile-test profile-build content-test content-build account-build frontend-test frontend-build backend-test backend-build compose-config compose-down
 
-frontend-install:
-	cd frontend && npm install
+profile-frontend-install:
+	cd profile/frontend && npm install
 
-frontend-test:
-	cd frontend && npm run test
+profile-frontend-test:
+	cd profile/frontend && npm run test
 
-frontend-build:
-	cd frontend && npm run build
+profile-frontend-build:
+	cd profile/frontend && npm run build
+
+content-frontend-install:
+	cd content/frontend && npm install
+
+content-frontend-test:
+	cd content/frontend && npm run test
+
+content-frontend-build:
+	cd content/frontend && npm run build
+
+design-system-build:
+	cd design-system && npm run build
+
+frontend-test: profile-frontend-test content-frontend-test
+
+frontend-build: profile-frontend-build content-frontend-build design-system-build
 
 profile-test:
-	cd profile-service && $(GRADLE) test
+	cd profile/backend && $(GRADLE) test
 
 profile-build:
-	cd profile-service && $(GRADLE) installDist
+	cd profile/backend && $(GRADLE) installDist
 
 content-test:
-	cd content-service && $(GRADLE) test
+	cd content/backend && $(GRADLE) test
 
 content-build:
-	cd content-service && $(GRADLE) installDist
+	cd content/backend && $(GRADLE) installDist
 
 account-build:
-	cd dev/account-src/backend && ./gradlew build -x test --no-daemon
+	cd account/backend && ./gradlew build -x test --no-daemon
 
-backend-test: profile-test
+backend-test: profile-test content-test
 
 backend-build: profile-build content-build
 

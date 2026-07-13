@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package onix.search.v1;
+
+option java_multiple_files = true;
+option java_package = "com.onix.search.v1";
+
+service SearchIndex {
+  rpc Search(SearchIndexRequest) returns (SearchIndexResponse);
+  rpc IngestEvents(IngestEventsRequest) returns (IngestEventsResponse);
+}
+
+message SearchIndexRequest {
+  string collection = 1;
+  string query = 2;
+  int32 limit = 3;
+}
+
+message SearchIndexResponse {
+  repeated SearchIndexHit hits = 1;
+  string error = 2;
+}
+
+message SearchIndexHit {
+  string id = 1;
+  double score = 2;
+  string snippet = 3;
+}
+
+message IngestEventsRequest {
+  repeated IndexEvent events = 1;
+}
+
+message IndexEvent {
+  string event_id = 1;
+  string source_service = 2;
+  string operation = 3;
+  string collection = 4;
+  string document_id = 5;
+  int64 revision = 6;
+  string document_json = 7;
+  string occurred_at = 8;
+}
+
+message IngestEventsResponse {
+  repeated IngestEventResult results = 1;
+}
+
+message IngestEventResult {
+  string event_id = 1;
+  string status = 2;
+  string message = 3;
+}

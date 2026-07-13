@@ -2,56 +2,81 @@
 	auto_https off
 }
 
-http://account.localhost {
-	redir http://profile.localhost:8088/account{uri} 308
-}
-
-http://profile.localhost {
-	handle /.well-known/jwks.json {
-		reverse_proxy account:8081
-	}
-
-	@accountApi path /api/auth* /api/users* /api/sessions* /api/avatars* /api/notifications* /api/profile /api/profile/*
+(account_api) {
+	@accountApi path /api/auth* /api/users* /api/sessions* /api/avatars* /api/notifications* /api/profile /api/profile/* /api/organizations*
 	handle @accountApi {
 		reverse_proxy account:8081
 	}
 
-	@accountOrganizationStatic path /api/organizations /api/organizations/context /api/organizations/invitations*
-	handle @accountOrganizationStatic {
+	handle /.well-known/jwks.json {
 		reverse_proxy account:8081
 	}
+}
 
-	@accountOrganizationLookup path /api/organizations/by-name*
-	handle @accountOrganizationLookup {
-		reverse_proxy account:8081
-	}
+http://account.onix.localhost {
+	import account_api
 
-	@accountOrganizationUuid path_regexp accountOrganizationUuid ^/api/organizations/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(/.*)?$
-	handle @accountOrganizationUuid {
-		reverse_proxy account:8081
+	handle {
+		reverse_proxy account:8080
 	}
+}
 
-	handle /graphql* {
-		reverse_proxy content-service:8080
-	}
+http://account.localhost {
+	redir http://account.onix.localhost:8088{uri}
+}
 
-	handle /subscriptions* {
-		reverse_proxy content-service:8080
-	}
+http://profile.onix.localhost {
+	@contentFrontend path /p/* /post/new /story/new /story/*
+	redir @contentFrontend http://content.onix.localhost:8088{uri}
 
-	handle /content-media/* {
-		reverse_proxy content-service:8080
-	}
+	import account_api
 
 	handle /api/* {
-		reverse_proxy profile-service:8080
-	}
-
-	handle_path /account/* {
-		reverse_proxy account:8080
+		reverse_proxy profile-backend:8080
 	}
 
 	handle {
 		reverse_proxy profile-frontend:80
 	}
+}
+
+http://profile.localhost {
+	redir http://profile.onix.localhost:8088{uri}
+}
+
+http://content.onix.localhost {
+	@profileFrontend path /u/* /o/* /search
+	redir @profileFrontend http://profile.onix.localhost:8088{uri}
+
+	import account_api
+
+	handle /graphql* {
+		reverse_proxy content-backend:8080
+	}
+
+	handle /subscriptions* {
+		reverse_proxy content-backend:8080
+	}
+
+	handle /content-media/* {
+		reverse_proxy content-backend:8080
+	}
+
+	handle {
+		reverse_proxy content-frontend:80
+	}
+}
+
+http://content.localhost {
+	redir http://content.onix.localhost:8088{uri}
+}
+
+http://media.onix.localhost {
+	handle {
+		reverse_proxy media-minio:9000
+	}
+}
+
+http://media.localhost {
+	redir http://media.onix.localhost:8088{uri}
 }

@@ -1,0 +1,29 @@
+{
+  "name": "@onix/design-system",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "Framework-agnostic Onix design tokens, CSS primitives, and headless UI helpers.",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "node scripts/build.mjs && python3 -m http.server 5180 -d dist"
+  },
+  "sideEffects": [
+    "./dist/*.css"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./css": "./dist/index.css",
+    "./tokens.css": "./dist/tokens.css",
+    "./tokens.dark.css": "./dist/tokens.dark.css",
+    "./tokens": {
+      "default": "./tokens/tokens.json"
+    }
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts"
+}

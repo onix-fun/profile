@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+package onix.media.v1;
+
+option java_multiple_files = true;
+option java_package = "com.onix.media.v1";
+
+service MediaStore {
+  rpc InitUpload(InitUploadRequest) returns (InitUploadResponse);
+  rpc CompleteUpload(CompleteUploadRequest) returns (CompleteUploadResponse);
+  rpc GetUploadSession(GetUploadSessionRequest) returns (GetUploadSessionResponse);
+  rpc CreateReference(CreateReferenceRequest) returns (CreateReferenceResponse);
+  rpc GetDownloadURL(GetDownloadURLRequest) returns (GetDownloadURLResponse);
+}
+
+message InitUploadRequest {
+  string mime_type = 2;
+  int64 expected_size = 3;
+  int32 parts_count = 4;
+}
+
+message InitUploadResponse {
+  string session_id = 1;
+  map<int32, string> parts = 2;
+  string expires_at = 3;
+}
+
+message CompleteUploadRequest {
+  string session_id = 1;
+  repeated UploadPart parts = 2;
+}
+
+message UploadPart {
+  int32 part_number = 1;
+  string etag = 2;
+}
+
+message CompleteUploadResponse {
+  bool accepted = 1;
+}
+
+message GetUploadSessionRequest {
+  string session_id = 1;
+}
+
+message GetUploadSessionResponse {
+  string session_id = 1;
+  string status = 2;
+  string blob_id = 3;
+}
+
+message CreateReferenceRequest {
+  string blob_id = 1;
+  string reference_type = 2;
+  string reference_id = 3;
+}
+
+message CreateReferenceResponse {
+  bool recorded = 1;
+}
+
+message GetDownloadURLRequest {
+  string blob_id = 1;
+}
+
+message GetDownloadURLResponse {
+  string url = 1;
+}

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Onix Design System</title>
+    <link rel="stylesheet" href="/index.css" />
+    <style>
+      main {
+        width: min(920px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 48px 0;
+      }
+
+      .swatches {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 12px;
+        margin-top: 24px;
+      }
+
+      .swatch {
+        min-height: 96px;
+        border: 1px solid var(--surface-strong);
+        border-radius: var(--radius-sm);
+        background: var(--surface);
+        padding: 14px;
+      }
+
+      .chip {
+        display: inline-flex;
+        width: 100%;
+        height: 32px;
+        border-radius: var(--radius-xs);
+        margin-bottom: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Onix Design System</h1>
+      <p>Shared tokens, CSS primitives, and package exports for Account, Profile, and Content frontends.</p>
+      <section class="swatches">
+        <article class="swatch"><span class="chip" style="background: var(--text)"></span><strong>Text</strong></article>
+        <article class="swatch"><span class="chip" style="background: var(--surface-muted)"></span><strong>Surface muted</strong></article>
+        <article class="swatch"><span class="chip" style="background: var(--info)"></span><strong>Info</strong></article>
+        <article class="swatch"><span class="chip" style="background: var(--success)"></span><strong>Success</strong></article>
+        <article class="swatch"><span class="chip" style="background: var(--warning)"></span><strong>Warning</strong></article>
+        <article class="swatch"><span class="chip" style="background: var(--danger)"></span><strong>Danger</strong></article>
+      </section>
+    </main>
+  </body>
+</html>
