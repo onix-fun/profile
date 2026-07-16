@@ -18,13 +18,17 @@ export class ProfileService {
     return response.data.user;
   }
 
-  static async getProfile(nickname: string): Promise<ProfileCanvasResponse> {
-    const response = await api.get<ProfileCanvasResponse>(`/profiles/${encodeURIComponent(nickname)}`);
+  static async getProfile(nickname: string, from?: string): Promise<ProfileCanvasResponse> {
+    const response = await api.get<ProfileCanvasResponse>(`/profiles/${encodeURIComponent(nickname)}`, {
+      params: { from },
+    });
     return response.data;
   }
 
-  static async getOrganization(orgName: string): Promise<ProfileCanvasResponse> {
-    const response = await api.get<ProfileCanvasResponse>(`/organizations/${encodeURIComponent(orgName)}`);
+  static async getOrganization(orgName: string, from?: string): Promise<ProfileCanvasResponse> {
+    const response = await api.get<ProfileCanvasResponse>(`/organizations/${encodeURIComponent(orgName)}`, {
+      params: { from },
+    });
     return response.data;
   }
 

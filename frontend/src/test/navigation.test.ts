@@ -6,6 +6,9 @@ import { contentUrl } from "@/api/navigation";
 import { ProfileService } from "@/api/profileService";
 import { ContentService } from "@/api/contentService";
 import AppShell from "@/features/shell/AppShell.vue";
+import App from "@/App.vue";
+import { filterProfileNavigation } from "@/features/embed/profileEmbed";
+import type { ProfileNavButton } from "@/api/types";
 
 vi.mock("@/api/profileService", () => ({
   ProfileService: {
@@ -27,6 +30,14 @@ beforeEach(() => {
 });
 
 describe("route auth guard", () => {
+  it("keeps /me as a profile-owned route", async () => {
+    await appRouter.push("/me");
+    await appRouter.isReady();
+
+    expect(ProfileService.session).toHaveBeenCalled();
+    expect(appRouter.currentRoute.value.path).toBe("/me");
+  });
+
   it("redirects content-owned paths before checking the profile session", async () => {
     const result = await appRouter.push("/p/post-1?comment=latest");
 
@@ -36,7 +47,7 @@ describe("route auth guard", () => {
   });
 
   it("redirects content creation and story paths before checking the profile session", async () => {
-    await appRouter.push("/post/new");
+    await appRouter.push("/p/new");
     await appRouter.push("/story/story-1");
 
     expect(ProfileService.session).not.toHaveBeenCalled();
@@ -91,5 +102,61 @@ describe("app shell navigation", () => {
     expect(wrapper.find(".brand-mark").attributes("href")).toBe("http://content.onix.localhost:8088/");
     expect(wrapper.find('.account-menu__nav a[href="http://content.onix.localhost:8088/"]').exists()).toBe(true);
     expect(ContentService.currentActor).toHaveBeenCalled();
+  });
+});
+
+describe("profile embed mode", () => {
+  it("renders routed content without the Profile shell when embed is enabled", async () => {
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: "/u/:nickname", component: { template: "<section class=\"embedded-profile\">profile</section>" } }],
+    });
+    await router.push("/u/alice?embed=1&from=content&parentOrigin=http%3A%2F%2Fcontent.test");
+    await router.isReady();
+
+    const wrapper = mount(App, {
+      global: {
+        plugins: [router],
+        components: { PToast: { template: "<div />" } },
+      },
+    });
+
+    expect(wrapper.find(".embedded-profile").exists()).toBe(true);
+    expect(wrapper.find(".app-shell").exists()).toBe(false);
+    expect(wrapper.find(".avatar-menu-button").exists()).toBe(false);
+
+    wrapper.unmount();
+  });
+
+  it("keeps the Profile shell in standalone mode", async () => {
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: "/u/:nickname", component: { template: "<section>profile</section>" } }],
+    });
+    await router.push("/u/alice");
+    await router.isReady();
+
+    const wrapper = mount(App, {
+      global: {
+        plugins: [router],
+        components: { PToast: { template: "<div />" } },
+      },
+    });
+
+    expect(wrapper.find(".app-shell").exists()).toBe(true);
+
+    wrapper.unmount();
+  });
+
+  it("filters external service buttons while keeping profile-core navigation", () => {
+    const buttons: ProfileNavButton[] = [
+      { key: "collections", serviceKey: "profile", featureKey: "collections", label: "Collections", icon: "pi pi-bookmark", color: "#111", kind: "collections" },
+      { key: "posts", serviceKey: "content", featureKey: "posts", label: "Posts", icon: "pi pi-th-large", color: "#111", kind: "section" },
+      { key: "clips", serviceKey: "media", featureKey: "clips", label: "Clips", icon: "pi pi-video", color: "#111", kind: "section" },
+    ];
+
+    expect(filterProfileNavigation(buttons, { query: {} } as never).map((button) => button.key)).toEqual(["collections", "posts", "clips"]);
+    expect(filterProfileNavigation(buttons, { query: { from: "content" } } as never).map((button) => button.key)).toEqual(["collections", "posts"]);
+    expect(filterProfileNavigation(buttons, { query: { from: "unknown" } } as never).map((button) => button.key)).toEqual(["collections"]);
   });
 });

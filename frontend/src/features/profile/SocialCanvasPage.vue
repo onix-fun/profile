@@ -4,6 +4,7 @@ import { RouterLink, useRoute, useRouter } from "vue-router";
 import { apiErrorMessage } from "@/api/client";
 import { ProfileService } from "@/api/profileService";
 import type { AccountProfile, RelatedUser, SocialFilter } from "@/api/types";
+import { withEmbedQuery } from "@/features/embed/profileEmbed";
 import {
   buildSocialCanvasLayout,
   type SocialCanvasSize,
@@ -147,7 +148,7 @@ function displayName(user: Pick<RelatedUser, "displayName" | "firstName" | "last
 
 function profilePath(ownerType: "USER" | "ORGANIZATION", username: string): string {
   const prefix = ownerType === "ORGANIZATION" ? "o" : "u";
-  return `/${prefix}/${encodeURIComponent(username)}`;
+  return withEmbedQuery(route, `/${prefix}/${encodeURIComponent(username)}`);
 }
 </script>
 

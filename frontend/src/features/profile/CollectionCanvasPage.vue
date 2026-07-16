@@ -7,6 +7,7 @@ import { contentUrl } from "@/api/navigation";
 import type { CollectionDetail, ContentBlock, ProfileContentPost } from "@/api/types";
 import PostCloudNode from "@/features/content/PostCloudNode.vue";
 import SaveToCollectionsPopover from "@/features/content/SaveToCollectionsPopover.vue";
+import { postEmbedNavigation, withEmbedQuery } from "@/features/embed/profileEmbed";
 import {
   buildCollectionCanvasLayout,
   type CollectionCanvasSize,
@@ -28,7 +29,7 @@ let resizeObserver: ResizeObserver | null = null;
 const collectionId = computed(() => String(route.params.collectionId || ""));
 const isOrganizationRoute = computed(() => route.name === "OrganizationCollectionCanvas");
 const ownerSlug = computed(() => String(isOrganizationRoute.value ? route.params.orgname || "" : route.params.nickname || ""));
-const ownerPath = computed(() => `/${isOrganizationRoute.value ? "o" : "u"}/${encodeURIComponent(ownerSlug.value)}`);
+const ownerPath = computed(() => withEmbedQuery(route, `/${isOrganizationRoute.value ? "o" : "u"}/${encodeURIComponent(ownerSlug.value)}`));
 const layout = computed(() => detail.value ? buildCollectionCanvasLayout(detail.value.collection, detail.value.posts, viewportSize.value) : null);
 const stageStyle = computed(() => layout.value ? {
   width: `${layout.value.stage.width}px`,
@@ -92,6 +93,7 @@ function nodeStyle(node: CollectionPostNode) {
 }
 
 function openPost(post: ProfileContentPost) {
+  if (postEmbedNavigation(route, { serviceKey: "content", path: `/p/${encodeURIComponent(post.id)}`, url: contentUrl(`/p/${encodeURIComponent(post.id)}`, true) })) return;
   window.location.assign(contentUrl(`/p/${encodeURIComponent(post.id)}`, true));
 }
 
