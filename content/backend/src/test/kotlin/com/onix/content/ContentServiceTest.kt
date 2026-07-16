@@ -9,6 +9,9 @@ import com.onix.content.search.SearchIndexHit
 import com.onix.content.search.SearchIndexResult
 import com.onix.content.service.ContentService
 import com.onix.content.service.InMemoryContentRepository
+import com.onix.content.service.UploadedAssetVerifier
+import com.onix.content.service.MediaAssetProcessor
+import com.onix.content.service.RequestedMediaProcessing
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -21,6 +24,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class ContentServiceTest {
@@ -28,14 +32,132 @@ class ContentServiceTest {
     private val viewer = SessionUser(id = "22222222-2222-2222-2222-222222222222", username = "viewer")
 
     @Test
-    fun `comments are linear even when legacy parent id is sent`() {
+    fun `reply keeps the root parent id`() {
         val service = service()
         val post = service.createPost(user, CreatePostInput(text = "Hello", tags = listOf("kotlin")))
         val root = service.createComment(viewer, CreateCommentInput(postId = post.id, text = "Root"))
         val reply = service.createComment(user, CreateCommentInput(postId = post.id, parentId = root.id, text = "Reply"))
 
         assertEquals(null, root.parentId)
-        assertEquals(null, reply.parentId)
+        assertEquals(root.id, reply.parentId)
+    }
+
+    @Test
+    fun `draft is private until its author publishes it`() {
+        val service = service()
+        val draft = service.savePostDraft(actor(user), SavePostDraftInput(text = "Набросок", blocks = listOf(textBlock("Набросок"))))
+
+        assertEquals(ContentStatus.DRAFT, draft.status)
+        assertTrue(service.listPostDrafts(actor(user)).any { it.id == draft.id })
+        assertEquals(null, service.post(draft.id, viewer.id))
+
+        val published = service.publishPostDraft(actor(user), draft.id)
+        assertEquals(ContentStatus.ACTIVE, published.status)
+        assertEquals(Visibility.PUBLIC, published.visibility)
+        assertTrue(service.post(published.id, viewer.id) != null)
+    }
+
+    @Test
+    fun `only meaningful content can be published while blank drafts remain valid`() {
+        val service = service()
+
+        assertFailsWith<IllegalArgumentException> {
+            service.createPost(user, CreatePostInput(title = "Только заголовок", tags = listOf("design")))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            service.createPost(user, CreatePostInput(text = ":::onix DIVIDER {}", blocks = listOf(
+                ContentBlock(type = ContentBlockType.DIVIDER)
+            )))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            service.createPost(user, CreatePostInput(blocks = listOf(ContentBlock(
+                type = ContentBlockType.FILE,
+                data = JsonObject(mapOf("markdownRef" to JsonPrimitive("media:pending-upload")))
+            ))))
+        }
+
+        val blankDraft = service.savePostDraft(actor(user), SavePostDraftInput(title = "Набросок"))
+        assertEquals(ContentStatus.DRAFT, blankDraft.status)
+        assertFailsWith<IllegalArgumentException> { service.publishPostDraft(actor(user), blankDraft.id) }
+
+        val legacy = service.createPost(user, CreatePostInput(text = "Совместимый Markdown"))
+        val media = service.createPost(user, CreatePostInput(blocks = listOf(ContentBlock(
+            type = ContentBlockType.IMAGE,
+            data = JsonObject(mapOf("blobId" to JsonPrimitive("44444444-4444-4444-4444-444444444444")))
+        ))))
+        assertTrue(legacy.blocks.isNotEmpty())
+        assertEquals(ContentBlockType.IMAGE, media.blocks.single().type)
+
+        assertFailsWith<IllegalArgumentException> {
+            service.updatePost(actor(user), UpdatePostInput(
+                id = legacy.id,
+                text = ":::onix DIVIDER {}",
+                blocks = listOf(ContentBlock(type = ContentBlockType.DIVIDER))
+            ))
+        }
+    }
+
+    @Test
+    fun `creator blocks validate trusted embed hosts`() {
+        val service = service()
+        val accepted = service.createPost(user, CreatePostInput(
+            text = "Видео",
+            blocks = listOf(ContentBlock(type = ContentBlockType.TRUSTED_EMBED, data = JsonObject(mapOf("url" to JsonPrimitive("https://www.youtube.com/embed/demo")))))
+        ))
+        assertEquals(ContentBlockType.TRUSTED_EMBED, accepted.blocks.single().type)
+        assertEquals("https://www.youtube.com/embed/demo", accepted.blocks.single().data["url"]?.jsonPrimitive?.content)
+
+        assertFailsWith<IllegalArgumentException> {
+            service.createPost(user, CreatePostInput(
+                text = "Небезопасно",
+                blocks = listOf(ContentBlock(type = ContentBlockType.TRUSTED_EMBED, data = JsonObject(mapOf("url" to JsonPrimitive("https://example.test/embed")))))
+            ))
+        }
+    }
+
+    @Test
+    fun `poll keeps one active vote per owner and author can close it`() {
+        val service = service()
+        val pollId = "poll-1"
+        val post = service.createPost(user, CreatePostInput(
+            text = "Опрос",
+            blocks = listOf(ContentBlock(id = pollId, type = ContentBlockType.POLL, data = JsonObject(mapOf(
+                "question" to JsonPrimitive("Что выбрать?"),
+                "options" to JsonArray(listOf(
+                    JsonObject(mapOf("id" to JsonPrimitive("a"), "label" to JsonPrimitive("А"))),
+                    JsonObject(mapOf("id" to JsonPrimitive("b"), "label" to JsonPrimitive("Б")))
+                ))
+            ))))
+        ))
+
+        service.votePoll(actor(viewer), PollVoteInput(post.id, pollId, "a"))
+        val changed = service.votePoll(actor(viewer), PollVoteInput(post.id, pollId, "b"))
+        assertEquals(0L, changed.counts["a"] ?: 0L)
+        assertEquals(1L, changed.counts["b"])
+
+        val closed = service.closePoll(actor(user), post.id, pollId)
+        assertTrue(closed.closed)
+        assertFailsWith<IllegalArgumentException> { service.votePoll(actor(viewer), PollVoteInput(post.id, pollId, "a")) }
+    }
+
+    @Test
+    fun `thread groups one level replies and report hides only for reporter`() {
+        val service = service()
+        val post = service.createPost(user, CreatePostInput(text = "Комменты"))
+        val root = service.createComment(viewer, CreateCommentInput(postId = post.id, text = "Корень"))
+        val reply = service.createComment(user, CreateCommentInput(postId = post.id, parentId = root.id, text = "Ответ"))
+        val thread = service.commentThread(
+            CommentThreadInput(postId = post.id, sort = CommentSort.TOP),
+            OwnerRef(OwnerType.USER, viewer.id),
+            { owner -> AccountVisibility(ownerId = owner.toVisibilityOwner().ownerId, viewerId = viewer.id) }
+        )
+        assertEquals(listOf(reply.id), thread.comments.single().replies.map { it.id })
+
+        service.reportComment(actor(viewer), ReportCommentInput(root.id, "Спам в обсуждении"))
+        val reporterThread = service.commentThread(CommentThreadInput(post.id), OwnerRef(OwnerType.USER, viewer.id), { AccountVisibility(ownerId = user.id, viewerId = viewer.id) })
+        val authorThread = service.commentThread(CommentThreadInput(post.id), OwnerRef(OwnerType.USER, user.id), { AccountVisibility(ownerId = user.id, viewerId = user.id) })
+        assertTrue(reporterThread.comments.isEmpty())
+        assertEquals(root.id, authorThread.comments.single().id)
     }
 
     @Test
@@ -61,6 +183,7 @@ class ContentServiceTest {
                     id = "33333333-3333-3333-3333-333333333333",
                     type = ContentBlockType.FILE,
                     data = JsonObject(mapOf(
+                        "blobId" to JsonPrimitive("44444444-4444-4444-4444-444444444444"),
                         "fileName" to JsonPrimitive("brief.pdf"),
                         "mimeType" to JsonPrimitive("application/pdf"),
                         "markdownRef" to JsonPrimitive("media:file-1")
@@ -77,13 +200,14 @@ class ContentServiceTest {
     fun `comments accept markdown blocks and files`() {
         val service = service()
         val post = service.createPost(user, CreatePostInput(text = "Hello"))
+        val clientBlockId = "33333333-3333-3333-3333-333333333333"
         val comment = service.createComment(viewer, CreateCommentInput(
             postId = post.id,
             text = "Nice ![[media:file-1|brief.pdf]]",
             blocks = listOf(
                 textBlock("Nice ![[media:file-1|brief.pdf]]"),
                 ContentBlock(
-                    id = "33333333-3333-3333-3333-333333333333",
+                    id = clientBlockId,
                     type = ContentBlockType.FILE,
                     data = JsonObject(mapOf(
                         "fileName" to JsonPrimitive("brief.pdf"),
@@ -96,6 +220,7 @@ class ContentServiceTest {
 
         assertEquals(2, comment.blocks.size)
         assertEquals(ContentBlockType.FILE, comment.blocks.last().type)
+        assertNotEquals(clientBlockId, comment.blocks.last().id)
     }
 
     @Test
@@ -127,6 +252,15 @@ class ContentServiceTest {
         assertEquals("brief.pdf", fileData["fileName"]?.jsonPrimitive?.content)
         assertEquals("application/pdf", fileData["mimeType"]?.jsonPrimitive?.content)
         assertEquals(JsonPrimitive(42L), fileData["size"])
+
+        val rawUpload = enrichUploadBlocks(JsonArray(emptyList()), listOf(UploadedMedia(
+            fileName = "poster.png",
+            mimeType = "image/png",
+            size = 64,
+            blobId = "55555555-5555-5555-5555-555555555555"
+        ))).single().jsonObject
+        assertEquals(ContentBlockType.IMAGE.name, rawUpload["type"]?.jsonPrimitive?.content)
+        assertEquals("55555555-5555-5555-5555-555555555555", rawUpload["data"]?.jsonObject?.get("blobId")?.jsonPrimitive?.content)
     }
 
     @Test
@@ -207,33 +341,93 @@ class ContentServiceTest {
     }
 
     @Test
+    fun `recommendation placements are stable per viewer and keep protected node space`() {
+        val service = service()
+        val posts = (1..6).map { index ->
+            service.createPost(user, CreatePostInput(text = "Post $index", tags = listOf("plastic")))
+        }
+
+        val initial = allRecommendationItems(service, viewer.id, "first")
+        val repeated = allRecommendationItems(service, viewer.id, "another-session")
+        assertEquals(posts.map { it.id }.toSet(), initial.keys)
+        assertEquals(
+            initial.mapValues { it.value.placement },
+            repeated.mapValues { it.value.placement }
+        )
+
+        val placements = initial.values.map { requireNotNull(it.placement) }
+        placements.forEachIndexed { index, placement ->
+            placements.drop(index + 1).forEach { other ->
+                assertFalse(recommendationBoxesConflict(placement, other))
+            }
+        }
+
+        val anotherViewer = allRecommendationItems(service, "33333333-3333-3333-3333-333333333333", "first")
+        assertNotEquals(initial[posts.first().id]?.placement, anotherViewer[posts.first().id]?.placement)
+    }
+
+    @Test
+    fun `recommendation chooses the strongest affinity tag and exposes constellation anchors`() {
+        val service = service()
+        val multiTag = service.createPost(user, CreatePostInput(text = "Both", tags = listOf("design", "kotlin")))
+        val kotlinPost = service.createPost(user, CreatePostInput(text = "Kotlin", tags = listOf("kotlin")))
+        service.createPost(user, CreatePostInput(text = "Design", tags = listOf("design")))
+        service.likePost(viewer, kotlinPost.id)
+
+        val items = allRecommendationItems(service, viewer.id, "affinity")
+        assertEquals("kotlin", items.getValue(multiTag.id).placement?.constellationKey)
+
+        val response = service.recommendationFeed(viewer.id, RecommendationFeedInput(chunkX = 0, chunkY = 0, limit = 50))
+        assertEquals(setOf("design", "kotlin"), response.constellations.map { it.key }.toSet())
+        val anchors = response.constellations
+        val dx = anchors[0].anchorX - anchors[1].anchorX
+        val dy = anchors[0].anchorY - anchors[1].anchorY
+        val distance = kotlin.math.sqrt(dx * dx + dy * dy)
+        assertTrue(distance in 520.0..760.0)
+    }
+
+    @Test
+    fun `recommendation materializes only visible active posts`() {
+        val service = service()
+        val visible = service.createPost(user, CreatePostInput(text = "Visible", tags = listOf("public")))
+        val closeFriends = service.createPost(user, CreatePostInput(text = "Friends", tags = listOf("private"), visibility = Visibility.CLOSE_FRIENDS))
+        val deleted = service.createPost(user, CreatePostInput(text = "Deleted", tags = listOf("public")))
+        service.deletePost(actor(user), deleted.id)
+
+        val items = allRecommendationItems(service, viewer.id, "visibility")
+        assertTrue(visible.id in items)
+        assertFalse(closeFriends.id in items)
+        assertFalse(deleted.id in items)
+    }
+
+    @Test
     fun `recommendation feed boosts authors from social graph`() {
         val service = service()
         val followed = SessionUser(id = "33333333-3333-3333-3333-333333333333", username = "followed")
         val followedPost = service.createPost(followed, CreatePostInput(text = "Social", tags = listOf("general")))
         service.createPost(user, CreatePostInput(text = "Other", tags = listOf("general")))
 
-        val feed = service.recommendationFeed(
+        val feed = allRecommendationItems(
+            service,
             viewer.id,
-            RecommendationFeedInput(chunkX = 0, chunkY = 0, sessionSeed = "stable", limit = 6),
+            "stable",
             socialGraph = AccountSocialGraph(followingIds = listOf(followed.id))
         )
 
-        assertEquals(followedPost.id, feed.items.first().post.id)
-        assertTrue(feed.items.first().reasons.contains("following"))
+        assertTrue(feed.getValue(followedPost.id).reasons.contains("following"))
     }
 
     @Test
     fun `recommendation feed reserves exploration slots`() {
         val service = service()
-        repeat(80) { index ->
+        repeat(8) { index ->
             service.createPost(user, CreatePostInput(text = "Post $index", tags = listOf("tag-${index % 5}")))
         }
 
-        val feed = service.recommendationFeed(viewer.id, RecommendationFeedInput(chunkX = 0, chunkY = 0, sessionSeed = "stable", limit = 40))
-        val explorationCount = feed.items.count { "explore" in it.reasons }
+        val feed = allRecommendationItems(service, viewer.id, "stable")
+        val explorationCount = feed.values.count { "explore" in it.reasons }
 
-        assertTrue(explorationCount in 4..6)
+        assertEquals(1, explorationCount)
     }
 
     @Test
@@ -244,11 +438,10 @@ class ContentServiceTest {
         service.createPost(user, CreatePostInput(text = "General", tags = listOf("general")))
 
         service.recordPostView(viewer, viewed.id, 1200)
-        val feed = service.recommendationFeed(viewer.id, RecommendationFeedInput(chunkX = 0, chunkY = 0, sessionSeed = "stable", limit = 6))
+        val feed = allRecommendationItems(service, viewer.id, "stable")
 
-        assertEquals(freshMatch.id, feed.items.first().post.id)
-        assertTrue(feed.items.first().reasons.contains("tag-affinity"))
-        assertTrue(feed.items.first { it.post.id == viewed.id }.reasons.contains("seen-before"))
+        assertTrue(feed.getValue(freshMatch.id).reasons.contains("tag-affinity"))
+        assertTrue(feed.getValue(viewed.id).reasons.contains("seen-before"))
     }
 
     @Test
@@ -347,6 +540,70 @@ class ContentServiceTest {
 
         assertEquals(60_000L, story.durationMs)
         assertEquals(JsonPrimitive(60_000L), story.blocks.first().data["trimEndMs"])
+    }
+
+    @Test
+    fun `v2 story stores stable media identity and releases source after commit`() {
+        val canonical = PostAsset(
+            id = "story-image",
+            kind = PostAssetKind.IMAGE,
+            sourceKind = PostAssetSourceKind.UPLOAD,
+            assetId = "story-image",
+            status = MediaAssetStatus.READY,
+            variants = listOf(AssetVariant(url = "https://minio.invalid/temporary", name = "image-1440", mimeType = "image/webp", width = 960, height = 1280)),
+            generation = 4,
+            deliveryContract = "STABLE_V2"
+        )
+        var released = false
+        val service = ContentService(
+            repository = InMemoryContentRepository(),
+            uploadedAssetVerifier = UploadedAssetVerifier { _, _ -> canonical },
+            mediaAssetProcessor = object : MediaAssetProcessor {
+                override fun request(owner: String, assetId: String, kind: PostAssetKind, idempotencyKey: String) =
+                    RequestedMediaProcessing("unused", 4)
+                override fun releaseSource(owner: String, assetId: String, generation: Long) {
+                    released = owner == user.id && assetId == "story-image" && generation == 4L
+                }
+            },
+            clock = fixedClock()
+        )
+
+        val story = service.createStory(actor(user), CreateStoryInput(blocks = listOf(ContentBlock(
+            type = ContentBlockType.IMAGE,
+            data = JsonObject(mapOf(
+                "assetId" to JsonPrimitive("story-image"),
+                "fileName" to JsonPrimitive("must-not-leak.jpg")
+            ))
+        ))))
+
+        val data = story.blocks.single().data
+        assertEquals("/content-media/assets/story-image/4/image-1440", data["url"]?.jsonPrimitive?.content)
+        assertEquals(null, data["fileName"])
+        assertTrue(released)
+        assertEquals(
+            user.id,
+            service.resolveStableAssetOwner(
+                assetId = "story-image",
+                generation = 4,
+                source = false,
+                viewer = OwnerRef(OwnerType.USER, viewer.id),
+                visibilityResolver = { AccountVisibility(ownerId = user.id, viewerId = viewer.id) }
+            )
+        )
+    }
+
+    @Test
+    fun `active legacy story media remains visible until expiry`() {
+        val service = service()
+        val blobId = "44444444-4444-4444-4444-444444444444"
+        service.createStory(user, CreateStoryInput(blocks = listOf(ContentBlock(
+            type = ContentBlockType.IMAGE,
+            data = JsonObject(mapOf("blobId" to JsonPrimitive(blobId)))
+        ))))
+
+        assertTrue(service.canViewMedia(blobId) { ownerKey ->
+            AccountVisibility(ownerId = ownerKey.toVisibilityOwner().ownerId, viewerId = viewer.id)
+        })
     }
 
     @Test
@@ -644,6 +901,375 @@ class ContentServiceTest {
         assertTrue(response.facets.any { it.group == "type" && it.value == "posts" && it.count == 1 && it.selected })
         assertTrue(response.facets.any { it.group == "tag" && it.value == "design" && it.count == 1 })
         assertEquals("ok", response.providerStatuses.single().status)
+    }
+
+    private fun allRecommendationItems(
+        service: ContentService,
+        viewerId: String,
+        sessionSeed: String,
+        socialGraph: AccountSocialGraph = AccountSocialGraph()
+    ): Map<String, RecommendationFeedItem> {
+        val items = linkedMapOf<String, RecommendationFeedItem>()
+        for (chunkX in -6..6) {
+            for (chunkY in -6..6) {
+                service.recommendationFeed(
+                    viewerId,
+                    RecommendationFeedInput(chunkX = chunkX, chunkY = chunkY, sessionSeed = sessionSeed, limit = 50),
+                    socialGraph = socialGraph
+                ).items.forEach { item -> items.putIfAbsent(item.post.id, item) }
+            }
+        }
+        return items
+    }
+
+    private fun recommendationBoxesConflict(left: RecommendationPlacement, right: RecommendationPlacement): Boolean {
+        val gap = 24.0
+        fun dimensions(placement: RecommendationPlacement) = when (placement.sizePreset) {
+            AssetSizePreset.S -> 288.0 to 230.0
+            AssetSizePreset.L -> 432.0 to 344.0
+            else -> 348.0 to 278.0
+        }
+        val (leftWidth, leftHeight) = dimensions(left)
+        val (rightWidth, rightHeight) = dimensions(right)
+        val separated = left.worldX + leftWidth + gap <= right.worldX ||
+            right.worldX + rightWidth + gap <= left.worldX ||
+            left.worldY + leftHeight + gap <= right.worldY ||
+            right.worldY + rightHeight + gap <= left.worldY
+        return !separated
+    }
+
+    @Test
+    fun `media projects require ready assets and hidden tags while empty media drafts remain valid`() {
+        val service = service()
+        val image = PostAsset(
+            id = "asset-image",
+            kind = PostAssetKind.IMAGE,
+            sourceKind = PostAssetSourceKind.UPLOAD,
+            assetId = "media-image",
+            status = MediaAssetStatus.READY
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            service.createPost(user, CreatePostInput(assets = listOf(image)))
+        }
+        val processingService = ContentService(
+            repository = InMemoryContentRepository(),
+            uploadedAssetVerifier = UploadedAssetVerifier { _, assetId ->
+                image.copy(id = assetId, assetId = assetId, status = MediaAssetStatus.PROCESSING)
+            },
+            clock = fixedClock()
+        )
+        // The browser's claimed state is not trusted: MediaStore is the
+        // authority that blocks publishing while its asset is processing.
+        assertFailsWith<IllegalArgumentException> {
+            processingService.createPost(user, CreatePostInput(assets = listOf(image), tags = listOf("design")))
+        }
+
+        val draft = service.savePostDraft(actor(user), SavePostDraftInput(assets = emptyList(), tags = emptyList()))
+        assertEquals(ContentStatus.DRAFT, draft.status)
+        assertFailsWith<IllegalArgumentException> { service.publishPostDraft(actor(user), draft.id) }
+
+        val post = service.createPost(user, CreatePostInput(
+            title = "ignored",
+            text = "ignored",
+            blocks = listOf(textBlock("ignored")),
+            assets = listOf(image),
+            tags = listOf("#design")
+        ))
+        assertEquals(3, post.contentVersion)
+        assertEquals(listOf(image.id), post.assets.map { it.id })
+        assertEquals("", post.text)
+        assertEquals(emptyList(), post.blocks)
+        assertEquals(listOf("design"), service.post(post.id, OwnerRef(OwnerType.USER, user.id))?.tags)
+        assertEquals(emptyList(), service.post(post.id, OwnerRef(OwnerType.USER, viewer.id))?.tags)
+        assertEquals(emptyList(), allRecommendationItems(service, viewer.id, "media-v2").getValue(post.id).post.tags)
+    }
+
+    @Test
+    fun `media projects keep only MediaStore delivery data`() {
+        val canonical = PostAsset(
+            id = "media-image",
+            kind = PostAssetKind.IMAGE,
+            sourceKind = PostAssetSourceKind.UPLOAD,
+            assetId = "media-image",
+            status = MediaAssetStatus.READY,
+            variants = listOf(AssetVariant("https://media.onix.test/delivery.webp"))
+        )
+        val service = ContentService(
+            repository = InMemoryContentRepository(),
+            uploadedAssetVerifier = UploadedAssetVerifier { _, assetId -> canonical.copy(id = assetId, assetId = assetId) },
+            clock = fixedClock()
+        )
+        val post = service.createPost(user, CreatePostInput(
+            assets = listOf(canonical.copy(
+                id = "project-item",
+                url = "https://other.example.test/forged.jpg",
+                variants = listOf(AssetVariant("https://other.example.test/forged.webp"))
+            )),
+            tags = listOf("design")
+        ))
+        val saved = post.assets.single()
+        assertEquals("project-item", saved.id)
+        assertEquals(null, saved.url)
+        assertEquals(listOf("https://media.onix.test/delivery.webp"), saved.variants.map { it.url })
+    }
+
+    @Test
+    fun `editor save verifies all media with one batch lookup`() {
+        var singleLookups = 0
+        var batchLookups = 0
+        val canonical = { id: String -> PostAsset(
+            id = id, assetId = id, kind = PostAssetKind.IMAGE,
+            sourceKind = PostAssetSourceKind.UPLOAD, status = MediaAssetStatus.AVAILABLE,
+            width = 800, height = 600
+        ) }
+        val verifier = object : UploadedAssetVerifier {
+            override fun asset(owner: String, assetId: String): PostAsset? {
+                singleLookups += 1
+                return canonical(assetId)
+            }
+
+            override fun assets(owner: String, assetIds: List<String>): Map<String, PostAsset> {
+                batchLookups += 1
+                return assetIds.associateWith(canonical)
+            }
+        }
+        val service = ContentService(repository = InMemoryContentRepository(), uploadedAssetVerifier = verifier, clock = fixedClock())
+        val draft = service.createPostDraft(actor(user))
+        val inputAssets = listOf(
+            canonical("media-a").copy(id = "item-a", layout = PostAssetLayout("media-a", -500, 0)),
+            canonical("media-b").copy(id = "item-b", layout = PostAssetLayout("media-b", 500, 0))
+        )
+
+        val saved = service.savePostEditorDocument(actor(user), SavePostEditorDocumentInput(
+            revisionId = draft.revisionId, editVersion = draft.editVersion,
+            assets = inputAssets, tags = listOf("design")
+        ))
+
+        assertEquals(2, saved.assets.size)
+        assertEquals(1, batchLookups)
+        assertEquals(0, singleLookups)
+    }
+
+    @Test
+    fun `media draft publication activates asynchronously after every asset is ready`() {
+        var status = MediaAssetStatus.PROCESSING
+        val media = PostAsset(
+            id = "media-image", kind = PostAssetKind.IMAGE,
+            sourceKind = PostAssetSourceKind.UPLOAD, assetId = "media-image", status = status
+        )
+        val service = ContentService(
+            repository = InMemoryContentRepository(),
+            uploadedAssetVerifier = UploadedAssetVerifier { _, assetId -> media.copy(id = assetId, assetId = assetId, status = status) },
+            clock = fixedClock()
+        )
+        val draft = service.savePostDraft(actor(user), SavePostDraftInput(assets = listOf(media), tags = listOf("design")))
+        val queued = service.requestPostPublication(actor(user), RequestPostPublicationInput(draft.id, "request-key-123"))
+        assertEquals(PostPublicationState.PROCESSING_MEDIA, queued.state)
+        assertEquals(null, service.post(draft.id, OwnerRef(OwnerType.USER, viewer.id)))
+
+        status = MediaAssetStatus.READY
+        service.reconcilePendingPublications()
+
+        assertEquals(PostPublicationState.ACTIVE, service.postPublication(actor(user), draft.id).state)
+        assertEquals(draft.id, service.post(draft.id, OwnerRef(OwnerType.USER, viewer.id))?.id)
+    }
+
+    @Test
+    fun `saving a media draft never requests conversion`() {
+        var processingRequests = 0
+        val media = PostAsset(
+            id = "media-image", kind = PostAssetKind.IMAGE, sourceKind = PostAssetSourceKind.UPLOAD,
+            assetId = "media-image", status = MediaAssetStatus.AVAILABLE, deliveryContract = "STABLE_V2"
+        )
+        val service = ContentService(
+            repository = InMemoryContentRepository(),
+            uploadedAssetVerifier = UploadedAssetVerifier { _, _ -> media },
+            mediaAssetProcessor = object : MediaAssetProcessor {
+                override fun request(owner: String, assetId: String, kind: PostAssetKind, idempotencyKey: String): RequestedMediaProcessing {
+                    processingRequests++
+                    return RequestedMediaProcessing("run-1", 1)
+                }
+            },
+            clock = fixedClock()
+        )
+        val draft = service.savePostDraft(actor(user), SavePostDraftInput(assets = listOf(media), tags = listOf("design")))
+        assertEquals(0, processingRequests)
+        service.requestPostPublication(actor(user), RequestPostPublicationInput(draft.id, "request-key-456"))
+        assertEquals(1, processingRequests)
+    }
+
+    @Test
+    fun `v4 revision publishes atomically and keeps the active project stable while editing`() {
+        val canonical = PostAsset(
+            id = "media-image", kind = PostAssetKind.IMAGE, sourceKind = PostAssetSourceKind.UPLOAD,
+            assetId = "media-image", status = MediaAssetStatus.READY,
+            sourceStatus = MediaSourceStatus.AVAILABLE,
+            processingStatus = MediaProcessingStatus.READY,
+            deliveryStatus = MediaDeliveryStatus.READY,
+            width = 1200, height = 800, generation = 1
+        )
+        val service = ContentService(
+            repository = InMemoryContentRepository(),
+            uploadedAssetVerifier = UploadedAssetVerifier { _, _ -> canonical },
+            clock = fixedClock()
+        )
+        val draft = service.createPostDraft(actor(user))
+        val saved = service.savePostEditorDocument(actor(user), SavePostEditorDocumentInput(
+            revisionId = draft.revisionId,
+            editVersion = draft.editVersion,
+            assets = listOf(canonical.copy(id = "project-item")),
+            tags = listOf("design")
+        ))
+        val publication = service.requestPostRevisionPublication(actor(user), saved.revisionId, "revision-key-123")
+        assertEquals(PostPublicationState.ACTIVE, publication.state)
+        val active = requireNotNull(service.post(saved.postId, OwnerRef(OwnerType.USER, viewer.id)))
+        assertEquals(listOf("project-item"), active.assets.map { it.id })
+
+        val edit = service.beginPostEdit(actor(user), active.id)
+        service.savePostEditorDocument(actor(user), SavePostEditorDocumentInput(
+            revisionId = edit.revisionId,
+            editVersion = edit.editVersion,
+            assets = edit.assets,
+            tags = listOf("new-tag"),
+            allowComments = false
+        ))
+        val stillActive = requireNotNull(service.post(active.id, OwnerRef(OwnerType.USER, user.id)))
+        assertEquals(listOf("design"), stillActive.tags)
+        assertTrue(stillActive.allowComments)
+    }
+
+    @Test
+    fun `cancelling publication unfreezes its revision for editing`() {
+        val canonical = PostAsset(
+            id = "media-image", kind = PostAssetKind.IMAGE, sourceKind = PostAssetSourceKind.UPLOAD,
+            assetId = "media-image", status = MediaAssetStatus.AVAILABLE,
+            sourceStatus = MediaSourceStatus.AVAILABLE,
+            processingStatus = MediaProcessingStatus.NONE,
+            deliveryStatus = MediaDeliveryStatus.NONE,
+            width = 1200, height = 800
+        )
+        val service = ContentService(
+            repository = InMemoryContentRepository(),
+            uploadedAssetVerifier = UploadedAssetVerifier { _, _ -> canonical },
+            clock = fixedClock()
+        )
+        val draft = service.createPostDraft(actor(user))
+        val saved = service.savePostEditorDocument(actor(user), SavePostEditorDocumentInput(
+            revisionId = draft.revisionId,
+            editVersion = draft.editVersion,
+            assets = listOf(canonical.copy(id = "project-item")),
+            tags = listOf("design")
+        ))
+
+        val requested = service.requestPostRevisionPublication(actor(user), saved.revisionId, "revision-key-cancel")
+        assertEquals(PostPublicationState.PROCESSING_MEDIA, requested.state)
+        assertFailsWith<IllegalArgumentException> {
+            service.savePostEditorDocument(actor(user), SavePostEditorDocumentInput(
+                revisionId = saved.revisionId,
+                editVersion = saved.editVersion,
+                assets = saved.assets,
+                tags = saved.tags
+            ))
+        }
+
+        val cancelled = service.cancelPostPublication(actor(user), saved.postId)
+        assertEquals(PostPublicationState.DRAFT, cancelled.state)
+        val editable = service.savePostEditorDocument(actor(user), SavePostEditorDocumentInput(
+            revisionId = saved.revisionId,
+            editVersion = saved.editVersion,
+            assets = saved.assets,
+            tags = listOf("design", "editable-again")
+        ))
+        assertEquals(PostRevisionState.DRAFT, editable.state)
+        assertEquals(listOf("design", "editable-again"), editable.tags)
+    }
+
+    @Test
+    fun `stable media responses never expose a presigned delivery url`() {
+        val canonical = PostAsset(
+            id = "media-image", kind = PostAssetKind.IMAGE, sourceKind = PostAssetSourceKind.UPLOAD,
+            assetId = "media-image", status = MediaAssetStatus.READY,
+            variants = listOf(AssetVariant(url = "https://minio.invalid/expired-signature", name = "image-960", mimeType = "image/webp")),
+            generation = 3, deliveryContract = "STABLE_V2"
+        )
+        val service = ContentService(
+            repository = InMemoryContentRepository(),
+            uploadedAssetVerifier = UploadedAssetVerifier { _, _ -> canonical },
+            clock = fixedClock()
+        )
+        val created = service.createPost(user, CreatePostInput(assets = listOf(canonical), tags = listOf("design")))
+        val response = requireNotNull(service.post(created.id, OwnerRef(OwnerType.USER, viewer.id)))
+        assertEquals("/content-media/assets/media-image/3/image-960", response.assets.single().variants.single().url)
+    }
+
+    @Test
+    fun `threads collapse replies to one level paginate children tombstone and replace pin atomically`() {
+        val service = service()
+        val post = service.createPost(user, CreatePostInput(text = "Thread"))
+        val root = service.createComment(user, CreateCommentInput(post.id, "root"))
+        val sibling = service.createComment(viewer, CreateCommentInput(post.id, "sibling"))
+        val child = service.createComment(viewer, CreateCommentInput(post.id, "child", parentId = root.id))
+        val nested = service.createComment(user, CreateCommentInput(post.id, "nested", parentId = child.id))
+
+        assertEquals(root.id, nested.parentId)
+        assertEquals(child.id, nested.replyToId)
+        val roots = service.commentThread(CommentThreadInput(post.id, limit = 1), null, { AccountVisibility(ownerId = user.id, viewerId = viewer.id) })
+        assertEquals(2, roots.totalCount)
+        assertTrue(roots.nextCursor != null)
+        val secondPage = service.commentThread(
+            CommentThreadInput(post.id, limit = 1, cursor = roots.nextCursor),
+            null,
+            { AccountVisibility(ownerId = user.id, viewerId = viewer.id) }
+        )
+        assertEquals(1, secondPage.comments.size)
+        val children = service.commentThread(
+            CommentThreadInput(post.id, parentId = root.id),
+            null,
+            { AccountVisibility(ownerId = user.id, viewerId = viewer.id) }
+        )
+        assertEquals(setOf(child.id, nested.id), children.comments.map { it.id }.toSet())
+
+        service.pinComment(actor(user), root.id, true)
+        service.pinComment(actor(user), sibling.id, true)
+        val pinnedRoots = service.commentThread(CommentThreadInput(post.id), null, { AccountVisibility(ownerId = user.id, viewerId = viewer.id) })
+        assertEquals(sibling.id, pinnedRoots.comments.first().id)
+        assertEquals(sibling.id, service.post(post.id, OwnerRef(OwnerType.USER, user.id))?.pinnedCommentId)
+
+        service.deleteComment(actor(viewer), child.id)
+        val repliesAfterDelete = service.commentThread(
+            CommentThreadInput(post.id, parentId = root.id),
+            null,
+            { AccountVisibility(ownerId = user.id, viewerId = viewer.id) }
+        ).comments
+        val deletedChild = repliesAfterDelete.first { it.id == child.id }
+        assertEquals(ContentStatus.DELETED, deletedChild.status)
+        assertEquals("", deletedChild.text)
+        assertEquals(setOf(child.id, nested.id), repliesAfterDelete.map { it.id }.toSet())
+    }
+
+    @Test
+    fun `post author hiding a comment removes it from the thread without deleting its branch`() {
+        val service = service()
+        val post = service.createPost(user, CreatePostInput(text = "Thread"))
+        val root = service.createComment(viewer, CreateCommentInput(post.id, "keep descendants"))
+        val child = service.createComment(user, CreateCommentInput(post.id, "child", parentId = root.id))
+
+        service.hideComment(actor(user), root.id)
+
+        val visibleRoots = service.commentThread(
+            CommentThreadInput(post.id),
+            OwnerRef(OwnerType.USER, viewer.id),
+            { AccountVisibility(ownerId = user.id, viewerId = viewer.id) }
+        ).comments
+        assertTrue(visibleRoots.isEmpty())
+
+        val descendants = service.commentThread(
+            CommentThreadInput(post.id, parentId = root.id),
+            OwnerRef(OwnerType.USER, viewer.id),
+            { AccountVisibility(ownerId = user.id, viewerId = viewer.id) }
+        )
+        assertEquals(listOf(child.id), descendants.comments.map { it.id })
     }
 
     private fun service() = ContentService(

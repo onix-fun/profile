@@ -14,6 +14,8 @@ import javax.sql.DataSource
 
 interface SearchEventPublisher {
     fun postUpsert(post: Post)
+    fun postUpsert(post: Post, discussion: String) = postUpsert(post)
+    fun postUpsert(post: Post, discussion: String, revision: Long) = postUpsert(post, discussion)
     fun postDelete(postId: String)
     fun commentUpsert(comment: Comment)
     fun commentDelete(commentId: String)
@@ -35,11 +37,15 @@ interface SearchEventPublisher {
 class OutboxSearchEventPublisher(private val dataSource: DataSource?) : SearchEventPublisher {
     private val json = Json { encodeDefaults = true }
 
-    override fun postUpsert(post: Post) {
+    override fun postUpsert(post: Post) = postUpsert(post, "", post.updatedAt.toEpochMilli())
+
+    override fun postUpsert(post: Post, discussion: String) = postUpsert(post, discussion, post.updatedAt.toEpochMilli())
+
+    override fun postUpsert(post: Post, discussion: String, revision: Long) {
         enqueue(
             collection = "posts",
             documentId = post.id,
-            revision = post.updatedAt.toEpochMilli(),
+            revision = revision,
             document = JsonObject(
                 mapOf(
                     "author_id" to JsonPrimitive(post.authorId),
@@ -48,6 +54,7 @@ class OutboxSearchEventPublisher(private val dataSource: DataSource?) : SearchEv
                     "title" to JsonPrimitive(post.title ?: ""),
                     "content" to JsonPrimitive(post.text),
                     "tags" to JsonPrimitive(post.tags.joinToString(" ")),
+                    "discussion" to JsonPrimitive(discussion),
                     "visibility" to JsonPrimitive(post.visibility.name),
                     "updated_at" to JsonPrimitive(post.updatedAt.toString())
                 )
@@ -56,21 +63,7 @@ class OutboxSearchEventPublisher(private val dataSource: DataSource?) : SearchEv
     }
 
     override fun commentUpsert(comment: Comment) {
-        enqueue(
-            collection = "comments",
-            documentId = comment.id,
-            revision = comment.updatedAt.toEpochMilli(),
-            document = JsonObject(
-                mapOf(
-                    "post_id" to JsonPrimitive(comment.postId),
-                    "author_id" to JsonPrimitive(comment.authorId),
-                    "owner_type" to JsonPrimitive(comment.ownerType.name),
-                    "owner_id" to JsonPrimitive(comment.ownerId),
-                    "content" to JsonPrimitive(comment.text),
-                    "updated_at" to JsonPrimitive(comment.updatedAt.toString())
-                )
-            )
-        )
+        // Search v2 never indexes comments as standalone public documents.
     }
 
     override fun postDelete(postId: String) {
@@ -84,13 +77,7 @@ class OutboxSearchEventPublisher(private val dataSource: DataSource?) : SearchEv
     }
 
     override fun commentDelete(commentId: String) {
-        enqueue(
-            collection = "comments",
-            documentId = commentId,
-            revision = Instant.now().toEpochMilli(),
-            operation = "delete",
-            document = JsonObject(emptyMap())
-        )
+        // The parent post discussion projection is reindexed by Content.
     }
 
     override fun collectionUpsert(collection: SavedCollection) {
@@ -169,7 +156,7 @@ private fun Connection.insertOutboxEvent(
             revision,
             payload_json
         )
-        VALUES (?::uuid, ?, 'search', 'search.index', ?, ?, ?, ?, ?::jsonb)
+        VALUES (?::uuid, ?, 'search', 'search.index', ?, ?::uuid, ?, ?, ?::jsonb)
         ON CONFLICT (idempotency_key) DO NOTHING
         """.trimIndent()
     ).use { statement ->

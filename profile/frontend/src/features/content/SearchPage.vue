@@ -6,9 +6,10 @@ import { ContentService } from "@/api/contentService";
 import { ProfileService } from "@/api/profileService";
 import { contentUrl, isContentPath } from "@/api/navigation";
 import { displayUsername, postSnippet } from "@/features/display/displayText";
+import { embedQuery, postEmbedNavigation, withEmbedQuery } from "@/features/embed/profileEmbed";
 import type { FeedItem, SearchFacet, SearchItem, SearchProviderStatus, SearchSuggestion } from "@/api/types";
 
-type SearchTypeFilter = "posts" | "collections" | "comments" | "tags";
+type SearchTypeFilter = "posts" | "collections" | "tags";
 type SortMode = "relevance" | "new" | "popular";
 type DateRange = "" | "day" | "week" | "month";
 
@@ -270,7 +271,7 @@ function applyHistory(item: SearchHistoryItem) {
 function applySuggestion(suggestion: SearchSuggestion) {
   if (suggestion.owner) {
     const prefix = suggestion.owner.ownerType === "ORGANIZATION" ? "o" : "u";
-    void router.push(`/${prefix}/${encodeURIComponent(suggestion.owner.username)}`);
+    void router.push(withEmbedQuery(route, `/${prefix}/${encodeURIComponent(suggestion.owner.username)}`));
     return;
   }
   if (suggestion.type === "TAG") {
@@ -286,19 +287,20 @@ function applySuggestion(suggestion: SearchSuggestion) {
 
 function openResult(item: SearchItem) {
   if (isContentPath(item.url)) {
+    if (postEmbedNavigation(route, { serviceKey: "content", path: item.url, url: contentUrl(item.url, true) })) return;
     window.location.assign(contentUrl(item.url, true));
     return;
   }
-  void router.push(item.url);
+  void router.push(withEmbedQuery(route, item.url));
 }
 
 function openDiscover(item: FeedItem) {
+  if (postEmbedNavigation(route, { serviceKey: "content", path: `/p/${encodeURIComponent(item.post.id)}`, url: contentUrl(`/p/${encodeURIComponent(item.post.id)}`, true) })) return;
   window.location.assign(contentUrl(`/p/${encodeURIComponent(item.post.id)}`, true));
 }
 
 function iconFor(item: SearchItem): string {
   if (item.type === "COLLECTION") return "pi pi-folder";
-  if (item.type === "COMMENT") return "pi pi-comments";
   if (item.type === "TAG") return "pi pi-hashtag";
   return "pi pi-file";
 }
@@ -334,7 +336,7 @@ function facetActive(facet: SearchFacet): boolean {
 
 function applyRouteState() {
   query.value = stringQuery(route.query.q);
-  selectedTypes.value = csvQuery(route.query.types).filter((value): value is SearchTypeFilter => ["posts", "collections", "comments", "tags"].includes(value));
+  selectedTypes.value = csvQuery(route.query.types).filter((value): value is SearchTypeFilter => ["posts", "collections", "tags"].includes(value));
   selectedProviders.value = csvQuery(route.query.providers);
   selectedTags.value = csvQuery(route.query.tags).map((tag) => tag.replace(/^#/, ""));
   selectedAuthor.value = stringQuery(route.query.author);
@@ -347,6 +349,7 @@ function syncRoute() {
   void router.replace({
     path: "/search",
     query: {
+      ...embedQuery(route),
       q: query.value.trim() || undefined,
       types: selectedTypes.value.length ? selectedTypes.value.join(",") : undefined,
       providers: selectedProviders.value.length ? selectedProviders.value.join(",") : undefined,
@@ -430,7 +433,7 @@ function stringQuery(value: unknown): string {
         <input
           v-model="query"
           type="search"
-          placeholder="Search posts, collections, comments, tags"
+          placeholder="Search posts, collections and tags"
           @focus="isSearchFocused = true"
           @keydown.enter.prevent="submitSearch"
         />

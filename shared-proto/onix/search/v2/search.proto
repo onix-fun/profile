@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+package onix.search.v2;
+
+option java_multiple_files = true;
+option java_package = "com.onix.search.v2";
+
+service SearchService {
+  rpc Search(SearchRequest) returns (SearchResponse);
+  rpc Similar(SimilarRequest) returns (SearchResponse);
+}
+
+enum SearchMode { SEARCH_MODE_AUTO = 0; SEARCH_MODE_LEXICAL = 1; SEARCH_MODE_SEMANTIC = 2; SEARCH_MODE_HYBRID = 3; }
+
+message SearchFilter { string field = 1; repeated string values = 2; }
+
+message SearchRequest {
+  string collection = 1;
+  string query = 2;
+  SearchMode mode = 3;
+  repeated SearchFilter filters = 4;
+  int32 limit = 5;
+  string cursor = 6;
+  double semantic_weight = 7;
+  string locale = 8;
+  bool explain = 9;
+}
+
+message SimilarRequest {
+  string collection = 1;
+  string text = 2;
+  string document_id = 3;
+  repeated SearchFilter filters = 4;
+  int32 limit = 5;
+  string cursor = 6;
+  string locale = 7;
+  bool explain = 8;
+}
+
+message SearchHit {
+  string id = 1;
+  double score = 2;
+  double lexical_score = 3;
+  double semantic_score = 4;
+  repeated string matched_fields = 5;
+  int64 revision = 6;
+  string document_json = 7;
+}
+
+message SearchResponse {
+  repeated SearchHit hits = 1;
+  string next_cursor = 2;
+  SearchMode effective_mode = 3;
+  double semantic_weight = 4;
+  bool lexical_fallback = 5;
+  string error = 6;
+}

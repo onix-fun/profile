@@ -19,6 +19,18 @@ export interface MediaReference {
 
 const WIKI_MEDIA_PATTERN = /!\[\[media:([^|\]]+)(?:\|([^\]]+))?\]\]/g;
 const MARKDOWN_MEDIA_PATTERN = /\[([^\]]+)\]\(media:([^)]+)\)/g;
+const CREATOR_DIRECTIVE = /^:::onix\s+(GALLERY|LINK_CARD|CALLOUT|QUOTE|DIVIDER|CODE|CHECKLIST|POLL|TRUSTED_EMBED)\s*(\{.*\})?\s*$/gim;
+const CREATOR_TYPES = new Set<ContentBlock["type"]>(["GALLERY", "LINK_CARD", "CALLOUT", "QUOTE", "DIVIDER", "CODE", "CHECKLIST", "POLL", "TRUSTED_EMBED"]);
+
+export type CreatorBlockType = Exclude<ContentBlock["type"], "TEXT" | "IMAGE" | "VIDEO" | "AUDIO" | "FILE">;
+
+export function creatorDirective(type: CreatorBlockType, data: Record<string, unknown>): string {
+  return `:::onix ${type} ${JSON.stringify(data)}`;
+}
+
+export function stripCreatorDirectives(markdown: string): string {
+  return markdown.replace(CREATOR_DIRECTIVE, "").replace(/\n{3,}/g, "\n\n").trim();
+}
 
 export function attachmentType(file: File): ContentAttachment["type"] {
   if (file.type.startsWith("video/")) return "VIDEO";
@@ -95,13 +107,29 @@ export function blockMediaRef(block: ContentBlock): string {
 
 export function buildContentBlocks(markdown: string, attachments: ContentAttachment[]): PostBlock[] {
   const blocks: PostBlock[] = [];
-  if (markdown.trim()) {
+  const specialBlocks: PostBlock[] = [];
+  const textMarkdown = markdown.replace(CREATOR_DIRECTIVE, (_raw, rawType: string, rawData?: string) => {
+    const type = rawType as ContentBlock["type"];
+    if (!CREATOR_TYPES.has(type)) return _raw;
+    try {
+      const data = rawData ? JSON.parse(rawData) : {};
+      if (!data || Array.isArray(data) || typeof data !== "object") return _raw;
+      specialBlocks.push({ id: crypto.randomUUID(), type, data: data as Record<string, unknown> });
+      return "";
+    } catch {
+      return _raw;
+    }
+  }).replace(/\n{3,}/g, "\n\n").trim();
+
+  if (textMarkdown) {
     blocks.push({
       id: crypto.randomUUID(),
       type: "TEXT",
-      data: { text: markdown.trim(), format: "markdown" },
+      data: { text: textMarkdown, format: "markdown" },
     });
   }
+
+  blocks.push(...specialBlocks);
 
   attachments.forEach((attachment) => {
     blocks.push({
@@ -128,5 +156,5 @@ export function plainTextFromContentBlocks(blocks: ContentBlock[]): string {
 }
 
 export function filesFromAttachments(attachments: ContentAttachment[]): File[] {
-  return attachments.map((attachment) => attachment.file).filter((file): file is File => Boolean(file));
+  return attachments.filter((attachment) => !attachment.blobId).map((attachment) => attachment.file).filter((file): file is File => Boolean(file));
 }

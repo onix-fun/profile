@@ -245,6 +245,7 @@ data class ProfileNavButton(
     val route: String? = null,
     val targetService: String? = null,
     val targetPath: String? = null,
+    val targetUrl: String? = null,
     val backendOperation: String? = null
 )
 

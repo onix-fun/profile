@@ -141,7 +141,7 @@ fun Application.registerRoutes(config: AppConfig, runtime: ProfileRuntime) {
                 val profileContent = contentSummary
                     .copy(collections = collections.collections(profile.ownerType, profile.id, activeOwner, 80))
                 call.respond(CanvasMapper.toCanvas(profile, currentUser, profileContent, activeOwner)
-                    .copy(navigation = navigation.navigation(profile.ownerType, profile.id, profile.username)))
+                    .copy(navigation = navigation.navigation(profile.ownerType, profile.id, profile.username, call.serviceFilter())))
             }
 
             get("/organizations/{orgName}") {
@@ -162,7 +162,7 @@ fun Application.registerRoutes(config: AppConfig, runtime: ProfileRuntime) {
                 val profileContent = contentSummary
                     .copy(collections = collections.collections(profile.ownerType, profile.id, activeOwner, 80))
                 call.respond(CanvasMapper.toCanvas(profile, currentUser, profileContent, activeOwner)
-                    .copy(navigation = navigation.navigation(profile.ownerType, profile.id, profile.username)))
+                    .copy(navigation = navigation.navigation(profile.ownerType, profile.id, profile.username, call.serviceFilter())))
             }
 
             get("/organizations/{orgName}/social") {
@@ -469,6 +469,14 @@ private fun String?.csv(): List<String> =
         .split(",")
         .map(String::trim)
         .filter(String::isNotBlank)
+
+private fun ApplicationCall.serviceFilter(): Set<String> =
+    request.queryParameters.getAll("from")
+        .orEmpty()
+        .flatMap { it.csv() }
+        .map { it.lowercase() }
+        .filter(String::isNotBlank)
+        .toSet()
 
 private fun String.ownerTypeParam(): String =
     if (equals("ORGANIZATION", ignoreCase = true)) "ORGANIZATION" else "USER"

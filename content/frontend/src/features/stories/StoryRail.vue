@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { RouterLink, useRouter } from "vue-router";
+import { Building2, Plus, User } from "lucide-vue-next";
 import { ContentService } from "@/api/contentService";
-import { mergeSeenState, sortStoryRail } from "@/features/stories/storyState";
+import { isStorySeen, mergeSeenState, sortStoryRail } from "@/features/stories/storyState";
 import { displayStoryAuthor } from "@/features/display/displayText";
 import type { CurrentActor, StoryRailItem } from "@/api/types";
 
@@ -16,18 +17,21 @@ onMounted(async () => {
   isLoading.value = true;
   try {
     const [actor, feed] = await Promise.all([
-      ContentService.currentActor(),
+      ContentService.currentActor().catch(() => null),
       ContentService.storiesFeed(),
     ]);
     currentActor.value = actor;
     stories.value = sortStoryRail(mergeSeenState(feed));
+  } catch {
+    currentActor.value = null;
+    stories.value = [];
   } finally {
     isLoading.value = false;
   }
 });
 
 function openStory(item: StoryRailItem) {
-  const firstStory = item.storyIds[0];
+  const firstStory = item.storyIds.find((id) => !isStorySeen(id)) || item.storyIds[0];
   if (firstStory) {
     void router.push({
       path: `/story/${encodeURIComponent(firstStory)}`,
@@ -81,7 +85,7 @@ function viewerInitial(): string {
       >
         <span class="story-ring">
           <img v-if="viewerAvatar()" :src="viewerAvatar()" alt="" />
-          <span v-else><i class="pi pi-user"></i></span>
+          <span v-else><User :size="20" /></span>
         </span>
         <strong>{{ displayStoryAuthor(viewerItem()!) }}</strong>
       </button>
@@ -90,11 +94,11 @@ function viewerInitial(): string {
         <span class="story-ring">
           <img v-if="viewerAvatar()" :src="viewerAvatar()" alt="" />
           <span v-else>
-            <i v-if="activeOwner?.ownerType === 'ORGANIZATION'" class="pi pi-building"></i>
+            <Building2 v-if="activeOwner?.ownerType === 'ORGANIZATION'" :size="20" />
             <strong v-else-if="viewerInitial()">{{ viewerInitial() }}</strong>
-            <i v-else class="pi pi-plus"></i>
+            <Plus v-else :size="20" />
           </span>
-          <small><i class="pi pi-plus"></i></small>
+          <small><Plus :size="13" /></small>
         </span>
         <strong>{{ viewerName() }}</strong>
       </RouterLink>
@@ -110,8 +114,8 @@ function viewerInitial(): string {
         <span class="story-ring">
           <img v-if="authorAvatar(item)" :src="authorAvatar(item)" alt="" />
           <span v-else>
-            <i v-if="item.ownerType === 'ORGANIZATION'" class="pi pi-building"></i>
-            <i v-else class="pi pi-user"></i>
+            <Building2 v-if="item.ownerType === 'ORGANIZATION'" :size="20" />
+            <User v-else :size="20" />
           </span>
         </span>
         <strong>{{ displayStoryAuthor(item) }}</strong>
@@ -126,14 +130,17 @@ function viewerInitial(): string {
 .story-rail {
   position: fixed;
   z-index: 70;
-  top: 0;
-  left: 0;
-  right: 0;
+  top: max(14px, env(safe-area-inset-top));
+  left: 50%;
+  width: min(760px, calc(100vw - 32px));
+  transform: translateX(-50%);
   overflow-x: auto;
   overflow-y: hidden;
-  padding-block: max(10px, env(safe-area-inset-top)) 12px;
-  background: linear-gradient(180deg, rgba(5, 7, 11, 0.18), transparent);
-  scrollbar-color: rgba(45, 212, 191, 0.28) transparent;
+  padding: 6px;
+  border-radius: 999px;
+  background: #ffffff;
+  box-shadow: 0 8px 24px rgba(35, 40, 50, .10);
+  scrollbar-color: rgba(100, 110, 126, .45) transparent;
   scrollbar-width: thin;
   pointer-events: auto;
 }
@@ -155,22 +162,22 @@ function viewerInitial(): string {
   width: max-content;
   box-sizing: border-box;
   display: flex;
-  gap: 16px;
+  gap: 10px;
   align-items: center;
   margin-inline: auto;
-  padding-inline: 20px;
+  padding-inline: 6px;
 }
 
 .story-pill {
-  width: 76px;
-  min-width: 76px;
+  width: 66px;
+  min-width: 66px;
   display: grid;
   justify-items: center;
-  gap: 6px;
+  gap: 4px;
   border: 0;
   padding: 0;
   background: transparent;
-  color: #0f172a;
+  color: #4d5663;
   text-decoration: none;
   cursor: pointer;
   transition: transform 180ms ease, opacity 180ms ease;
@@ -187,25 +194,23 @@ function viewerInitial(): string {
 
 .story-ring {
   position: relative;
-  width: 60px;
-  height: 60px;
+  width: 48px;
+  height: 48px;
   display: grid;
   place-items: center;
-  border-radius: 999px;
-  padding: 4px;
-  background:
-    conic-gradient(from 210deg, #22d3ee 0 42%, rgba(255, 255, 255, 0.32) 42% 48%, #818cf8 48% 72%, #22c55e 72% 100%);
-  box-shadow:
-    0 14px 36px rgba(15, 23, 42, 0.16),
-    0 0 22px rgba(45, 212, 191, 0.18);
+  border: 2px solid #d7dce3;
+  border-radius: 50%;
+  padding: 3px;
+  background: #ff5ab1;
+  box-shadow: 0 4px 12px rgba(35, 40, 50, .10);
 }
 
 .story-ring::before {
   content: "";
   position: absolute;
-  inset: -5px;
+  inset: -4px;
   border-radius: inherit;
-  border: 1px solid rgba(45, 212, 191, 0.24);
+  border: 2px solid #ff5ab1;
   opacity: 0;
   transform: scale(0.86);
   transition: opacity 180ms ease, transform 180ms ease;
@@ -219,16 +224,16 @@ function viewerInitial(): string {
 
 .story-ring img,
 .story-ring > span,
-.story-ring > i {
+.story-ring > svg {
   width: 100%;
   height: 100%;
   display: grid;
   place-items: center;
-  border: 2px solid rgba(255, 255, 255, 0.96);
-  border-radius: 999px;
+  border: 0;
+  border-radius: 50%;
   background: #ffffff;
   object-fit: cover;
-  color: #0f172a;
+  color: #526071;
   font-weight: 900;
 }
 
@@ -240,10 +245,10 @@ function viewerInitial(): string {
 }
 
 .story-pill strong {
-  max-width: 76px;
+  max-width: 66px;
   overflow: hidden;
-  color: #0f172a;
-  font-size: 11px;
+  color: #596574;
+  font-size: 10px;
   font-weight: 900;
   line-height: 1.1;
   text-overflow: ellipsis;
@@ -251,54 +256,56 @@ function viewerInitial(): string {
 }
 
 .story-pill--seen .story-ring {
-  background: rgba(15, 23, 42, 0.12);
-  box-shadow: none;
+  background: #c5cad2;
+  box-shadow: 0 4px 12px rgba(35, 40, 50, .08);
+  opacity: 0.74;
 }
 
 .story-pill--close .story-ring {
-  background: conic-gradient(from 220deg, #22c55e, #86efac 45%, #22d3ee 76%, #22c55e);
+  background: #9eea38;
 }
 
 .story-pill--seen.story-pill--close .story-ring {
-  background: rgba(34, 197, 94, 0.16);
+  background: #b8cf97;
 }
 
 .story-pill--create .story-ring {
   position: relative;
-  background: conic-gradient(from 210deg, #0f172a, #22d3ee, #0f172a);
+  background: #c7ecff;
 }
 
-.story-pill--create .story-ring > i {
-  background: #0f172a;
-  color: #ffffff;
+.story-pill--create .story-ring > svg {
+  background: #fff;
+  color: #526071;
 }
 
 .story-pill--create small {
   position: absolute;
-  right: -3px;
-  bottom: -3px;
-  width: 22px;
-  height: 22px;
+  right: -1px;
+  bottom: -1px;
+  width: 18px;
+  height: 18px;
   display: grid;
   place-items: center;
-  border: 2px solid #ffffff;
-  border-radius: 999px;
-  background: #0f172a;
-  color: #ffffff;
+  border: 0;
+  border-radius: 50%;
+  background: #ff5ab1;
+  color: #fff;
   font-size: 10px;
-  box-shadow: 0 0 18px rgba(45, 212, 191, 0.32);
+  box-shadow: 0 3px 8px rgba(35, 40, 50, .14);
 }
 
 .story-loading {
-  color: #667085;
-  font-size: 12px;
+  color: #7c8490;
+  font-size: 11px;
   font-weight: 800;
 }
 
 @media (max-width: 720px) {
   .story-rail {
-    top: 0;
-    padding-block: max(8px, env(safe-area-inset-top)) 10px;
+    top: max(10px, env(safe-area-inset-top));
+    width: min(100vw - 24px, 760px);
+    padding: 5px;
     scrollbar-width: none;
   }
 
@@ -307,18 +314,18 @@ function viewerInitial(): string {
   }
 
   .story-track {
-    gap: 10px;
-    padding-inline: 20px;
+    gap: 7px;
+    padding-inline: 4px;
   }
 
   .story-pill {
-    width: 64px;
-    min-width: 64px;
+    width: 58px;
+    min-width: 58px;
   }
 
   .story-ring {
-    width: 52px;
-    height: 52px;
+    width: 43px;
+    height: 43px;
   }
 }
 </style>

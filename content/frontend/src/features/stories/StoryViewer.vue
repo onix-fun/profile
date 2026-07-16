@@ -12,6 +12,7 @@ import { mergeSeenState, nextAuthorAfter, sortStoryRail } from "@/features/stori
 const route = useRoute();
 const router = useRouter();
 const group = ref<StoryGroup | null>(null);
+const viewerRoot = ref<HTMLElement | null>(null);
 const rail = ref<StoryRailItem[]>([]);
 const currentActor = ref<CurrentActor | null>(null);
 const storyIndex = ref(0);
@@ -21,6 +22,8 @@ const lockedPaused = ref(false);
 const muted = ref(true);
 const captionOpen = ref(false);
 const isTogglingLike = ref(false);
+const isLoading = ref(true);
+const loadError = ref("");
 const ringRadius = 54;
 const ringCircumference = 2 * Math.PI * ringRadius;
 let pointerStartX = 0;
@@ -78,11 +81,13 @@ const lifetimeLabel = computed(() => {
 onMounted(() => {
   void initialize();
   window.addEventListener("keydown", onKeydown);
+  document.addEventListener("visibilitychange", onVisibilityChange);
 });
 
 onBeforeUnmount(() => {
   stopProgress();
   window.removeEventListener("keydown", onKeydown);
+  document.removeEventListener("visibilitychange", onVisibilityChange);
 });
 
 watch(() => route.fullPath, () => {
@@ -96,24 +101,32 @@ watch(isPaused, () => {
 
 async function loadQueue() {
   stopProgress();
+  isLoading.value = true;
+  loadError.value = "";
   captionOpen.value = false;
   lockedPaused.value = false;
   const startStoryId = String(route.params.storyId || "");
-  let authorId = typeof route.query.author === "string" ? route.query.author : "";
-  let ownerType: "USER" | "ORGANIZATION" = route.query.ownerType === "ORGANIZATION" ? "ORGANIZATION" : "USER";
-  if (!authorId) {
-    const loaded = await ContentService.story(startStoryId);
-    authorId = loaded.ownerId || loaded.authorId;
-    ownerType = loaded.ownerType || "USER";
+  try {
+    let authorId = typeof route.query.author === "string" ? route.query.author : "";
+    let ownerType: "USER" | "ORGANIZATION" = route.query.ownerType === "ORGANIZATION" ? "ORGANIZATION" : "USER";
+    if (!authorId) {
+      const loaded = await ContentService.story(startStoryId);
+      authorId = loaded.ownerId || loaded.authorId;
+      ownerType = loaded.ownerType || "USER";
+    }
+    if (!isArchive.value) rail.value = sortStoryRail(mergeSeenState(await ContentService.storiesFeed()));
+    group.value = await ContentService.storyGroup(authorId, startStoryId, isArchive.value, ownerType);
+    if (!group.value.stories.length) throw new Error("История недоступна или уже закончилась.");
+    const startIndex = stories.value.findIndex((story) => story.id === (group.value?.startStoryId || startStoryId));
+    storyIndex.value = Math.max(0, startIndex);
+    await recordActiveView();
+    startProgress();
+  } catch (error) {
+    group.value = null;
+    loadError.value = error instanceof Error ? error.message : "Не удалось открыть историю.";
+  } finally {
+    isLoading.value = false;
   }
-  if (!isArchive.value) {
-    rail.value = sortStoryRail(mergeSeenState(await ContentService.storiesFeed()));
-  }
-  group.value = await ContentService.storyGroup(authorId, startStoryId, isArchive.value, ownerType);
-  const startIndex = stories.value.findIndex((story) => story.id === (group.value?.startStoryId || startStoryId));
-  storyIndex.value = Math.max(0, startIndex);
-  await recordActiveView();
-  startProgress();
 }
 
 async function initialize() {
@@ -145,7 +158,7 @@ function stopProgress() {
 
 async function recordActiveView() {
   if (!activeStory.value?.id) return;
-  window.localStorage.setItem(`story-seen:${activeStory.value.id}`, "true");
+  try { window.localStorage.setItem(`story-seen:${activeStory.value.id}`, "true"); } catch { /* private browsing */ }
   if (!currentActor.value) return;
   await ContentService.recordStoryView(activeStory.value.id).catch(() => undefined);
 }
@@ -270,7 +283,10 @@ function onViewerPointerUp(event: PointerEvent) {
     return;
   }
   if (!pointerMoved && elapsed < 260) {
-    lockedPaused.value = false;
+    const width = viewerRoot.value?.clientWidth || window.innerWidth;
+    if (event.clientX < width * 0.34) { lockedPaused.value = false; void prev(); }
+    else if (event.clientX > width * 0.66) { lockedPaused.value = false; void next(); }
+    else lockedPaused.value = !lockedPaused.value;
   }
 }
 
@@ -312,18 +328,24 @@ function formatArchiveTime(value?: string | null): string {
 
 async function syncMediaPlayback() {
   await nextTick();
-  const media = document.querySelector<HTMLVideoElement | HTMLAudioElement>(".story-orb video, .story-orb audio");
+  const media = viewerRoot.value?.querySelector<HTMLVideoElement | HTMLAudioElement>(".story-orb video, .story-orb audio");
   if (!media) return;
   if (isPaused.value) {
-    media.pause();
-  } else {
-    await media.play().catch(() => undefined);
+    if (typeof media.pause === "function") media.pause();
+  } else if (typeof media.play === "function") {
+    const playback = media.play();
+    if (playback && typeof playback.catch === "function") await playback.catch(() => undefined);
   }
+}
+
+function onVisibilityChange() {
+  holdPaused.value = document.hidden;
 }
 </script>
 
 <template>
   <section
+    ref="viewerRoot"
     class="story-viewer"
     :class="{ 'story-viewer--caption-open': captionOpen }"
     @pointerdown="onViewerPointerDown"
@@ -331,6 +353,14 @@ async function syncMediaPlayback() {
     @pointerup="onViewerPointerUp"
     @pointercancel="onViewerPointerCancel"
   >
+    <div v-if="isLoading || loadError" class="story-state" @pointerdown.stop>
+      <i :class="isLoading ? 'pi pi-spin pi-spinner' : 'pi pi-exclamation-circle'"></i>
+      <strong>{{ isLoading ? "Открываем историю" : loadError }}</strong>
+      <div v-if="loadError">
+        <button type="button" @click="loadQueue">Повторить</button>
+        <button type="button" @click="close">Закрыть</button>
+      </div>
+    </div>
     <div class="story-ambient" aria-hidden="true"></div>
 
     <div class="story-control-cluster" @pointerdown.stop>
@@ -402,6 +432,11 @@ async function syncMediaPlayback() {
       <div class="story-connector story-connector--actions" aria-hidden="true"></div>
 
       <section class="story-orb-shell" :class="{ 'is-paused': isPaused }">
+        <div class="story-progress-bars" aria-label="Прогресс историй">
+          <span v-for="(_, index) in stories" :key="index">
+            <i :style="{ width: index < storyIndex ? '100%' : index === storyIndex ? `${progress}%` : '0%' }"></i>
+          </span>
+        </div>
         <svg class="story-progress-ring" viewBox="0 0 120 120" aria-hidden="true">
           <circle class="story-progress-ring__track" cx="60" cy="60" :r="ringRadius" />
           <circle
@@ -431,8 +466,19 @@ async function syncMediaPlayback() {
         <Transition name="orb-swap" mode="out-in">
           <main v-if="activeStory" :key="activeStory.id" class="story-orb">
             <article v-for="block in renderBlocks" :key="block.id || text(block)" class="story-block">
-              <img v-if="block.type === 'IMAGE' && source(block)" :src="source(block)" alt="" />
-              <video v-else-if="block.type === 'VIDEO' && source(block)" :src="source(block)" autoplay playsinline :muted="muted" />
+              <img v-if="block.type === 'IMAGE' && source(block)" :src="source(block)" alt="" @error="loadError = 'Медиа истории временно недоступно.'" />
+              <video
+                v-else-if="block.type === 'VIDEO' && source(block)"
+                :src="source(block)"
+                autoplay
+                loop
+                playsinline
+                controls
+                preload="metadata"
+                :muted="muted"
+                :poster="typeof block.data.posterUrl === 'string' ? block.data.posterUrl : undefined"
+                @error="loadError = 'Видео истории временно недоступно.'"
+              />
               <audio v-else-if="block.type === 'AUDIO' && source(block)" :src="source(block)" autoplay :muted="muted" controls />
             </article>
           </main>
@@ -451,9 +497,9 @@ async function syncMediaPlayback() {
   place-items: center;
   overflow: hidden;
   background:
-    radial-gradient(circle at 20% 20%, rgba(45, 212, 191, 0.16), transparent 30%),
-    radial-gradient(circle at 80% 16%, rgba(129, 140, 248, 0.16), transparent 30%),
-    radial-gradient(circle at 52% 84%, rgba(34, 197, 94, 0.12), transparent 26%),
+    radial-gradient(circle at 20% 20%, rgba(0, 229, 255, 0.24), transparent 30%),
+    radial-gradient(circle at 80% 16%, rgba(255, 79, 123, 0.22), transparent 30%),
+    linear-gradient(140deg, rgba(246, 255, 24, 0.92) 0 12%, transparent 12%),
     #05070b;
   color: #ffffff;
   touch-action: pan-y;
@@ -474,7 +520,7 @@ async function syncMediaPlayback() {
   inset: 8%;
   border-radius: 999px;
   background:
-    conic-gradient(from 160deg, rgba(45, 212, 191, 0.12), transparent 20%, rgba(99, 102, 241, 0.14), transparent 58%, rgba(34, 197, 94, 0.1)),
+    conic-gradient(from 160deg, rgba(0, 229, 255, 0.18), transparent 20%, rgba(181, 76, 255, 0.16), transparent 58%, rgba(20, 247, 104, 0.13)),
     radial-gradient(circle, rgba(255, 255, 255, 0.06), transparent 62%);
   filter: blur(22px);
   opacity: 0.8;
@@ -496,13 +542,12 @@ async function syncMediaPlayback() {
 .story-delete {
   width: 42px;
   height: 42px;
-  border: 0;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.13);
-  color: #ffffff;
+  border: var(--comic-line);
+  border-radius: 8px;
+  background: var(--comic-paper-bright);
+  color: var(--comic-ink);
   cursor: pointer;
-  backdrop-filter: blur(16px);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  box-shadow: var(--comic-shadow-small);
   transition: transform 180ms ease, background 180ms ease;
 }
 
@@ -510,11 +555,12 @@ async function syncMediaPlayback() {
 .story-like:hover,
 .story-delete:hover {
   transform: translateY(-1px) scale(1.03);
-  background: rgba(255, 255, 255, 0.2);
+  background: var(--comic-yellow);
 }
 
 .story-control--close {
-  background: rgba(15, 23, 42, 0.72);
+  background: var(--comic-coral);
+  color: #ffffff;
 }
 
 .story-orbit-scene {
@@ -578,7 +624,7 @@ async function syncMediaPlayback() {
   inset: 0;
   overflow: visible;
   transform: rotate(-90deg);
-  filter: drop-shadow(0 0 18px rgba(45, 212, 191, 0.36));
+  filter: drop-shadow(0 0 18px rgba(246, 255, 24, 0.36));
   pointer-events: none;
 }
 
@@ -594,7 +640,7 @@ async function syncMediaPlayback() {
 }
 
 .story-progress-ring__value {
-  stroke: #67e8f9;
+  stroke: var(--comic-yellow);
   transition: stroke-dashoffset 80ms linear;
 }
 
@@ -611,10 +657,10 @@ async function syncMediaPlayback() {
   top: 0;
   width: 13px;
   height: 13px;
-  border: 0;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.36);
-  box-shadow: 0 0 0 5px rgba(255, 255, 255, 0.07);
+  border: 2px solid var(--comic-ink);
+  border-radius: 5px;
+  background: var(--comic-paper-bright);
+  box-shadow: 0 0 0 5px rgba(246, 255, 24, 0.09);
   cursor: pointer;
   transform:
     rotate(var(--orbit-angle))
@@ -626,16 +672,16 @@ async function syncMediaPlayback() {
 }
 
 .story-orbit-dot.is-complete {
-  background: rgba(34, 197, 94, 0.8);
+  background: var(--comic-lime);
 }
 
 .story-orbit-dot.is-active {
   width: 18px;
   height: 18px;
-  background: #ffffff;
+  background: var(--comic-yellow);
   box-shadow:
-    0 0 0 6px rgba(45, 212, 191, 0.22),
-    0 0 24px rgba(45, 212, 191, 0.62);
+    0 0 0 6px rgba(246, 255, 24, 0.2),
+    0 0 24px rgba(246, 255, 24, 0.56);
 }
 
 .story-node {
@@ -645,23 +691,21 @@ async function syncMediaPlayback() {
   align-items: center;
   gap: 10px;
   min-width: 0;
-  border-radius: 999px;
+  border: var(--comic-line);
+  border-radius: 8px;
   padding: 8px 12px;
-  background: rgba(9, 13, 20, 0.58);
-  color: #ffffff;
+  background: var(--comic-paper-bright);
+  color: var(--comic-ink);
   text-decoration: none;
-  box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.12),
-    0 16px 42px rgba(0, 0, 0, 0.24);
-  backdrop-filter: blur(18px);
+  box-shadow: var(--comic-shadow-small);
 }
 
 .story-node::after,
 .story-connector {
   content: "";
   position: absolute;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(148, 240, 229, 0.72), transparent);
+  height: 3px;
+  background: linear-gradient(90deg, transparent, var(--comic-yellow), transparent);
   transform-origin: left center;
   pointer-events: none;
 }
@@ -695,7 +739,7 @@ async function syncMediaPlayback() {
   left: 7%;
   bottom: 12%;
   width: min(360px, 42vw);
-  border-radius: 22px;
+  border-radius: 8px;
   padding: 0;
 }
 
@@ -725,14 +769,15 @@ async function syncMediaPlayback() {
   place-items: center;
   flex: 0 0 auto;
   overflow: hidden;
-  border-radius: 999px;
-  background: conic-gradient(from 210deg, #22d3ee, #818cf8, #22c55e, #22d3ee);
+  border: 2px solid var(--comic-ink);
+  border-radius: 6px;
+  background: var(--comic-cyan);
 }
 
 .story-node__avatar img {
   width: 100%;
   height: 100%;
-  border: 2px solid rgba(255, 255, 255, 0.86);
+  border: 2px solid var(--comic-ink);
   border-radius: inherit;
   object-fit: cover;
 }
@@ -759,14 +804,14 @@ async function syncMediaPlayback() {
 
 .story-node small,
 .story-node > span {
-  color: rgba(255, 255, 255, 0.68);
+  color: #46505a;
   font-size: 11px;
   font-weight: 800;
 }
 
 .story-node--time i,
 .story-close-friends i {
-  color: #86efac;
+  color: var(--comic-lime);
 }
 
 .story-caption-toggle {
@@ -778,7 +823,7 @@ async function syncMediaPlayback() {
   border-radius: inherit;
   padding: 13px 15px;
   background: transparent;
-  color: #ffffff;
+  color: var(--comic-ink);
   font: inherit;
   text-align: left;
   cursor: pointer;
@@ -787,7 +832,7 @@ async function syncMediaPlayback() {
 .story-caption-toggle span {
   max-height: 42px;
   overflow: hidden;
-  color: #ffffff;
+  color: var(--comic-ink);
   font-size: 13px;
   font-weight: 850;
   line-height: 1.3;
@@ -801,7 +846,7 @@ async function syncMediaPlayback() {
 
 .story-caption-toggle strong {
   grid-column: 1;
-  color: #99f6e4;
+  color: #0b8a3d;
   font-size: 11px;
   font-weight: 900;
 }
@@ -828,14 +873,14 @@ async function syncMediaPlayback() {
 .story-delete {
   display: grid;
   place-items: center;
-  color: #fecaca;
+  background: var(--comic-coral);
+  color: #ffffff;
 }
 
 .story-like.active {
-  background: rgba(225, 29, 72, 0.88);
-  box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.18),
-    0 0 28px rgba(225, 29, 72, 0.34);
+  background: var(--comic-coral);
+  color: var(--comic-ink);
+  box-shadow: var(--comic-shadow-small);
 }
 
 .story-like:disabled {
@@ -960,6 +1005,194 @@ async function syncMediaPlayback() {
   .story-like,
   .story-delete {
     transition-duration: 1ms;
+  }
+}
+
+/* Story v2 keeps the media intact and moves navigation into a quiet viewer. */
+.story-viewer {
+  background: #eef0f5;
+  color: #242731;
+  touch-action: none;
+}
+
+.story-ambient,
+.story-connector,
+.story-progress-ring,
+.story-orbit-selector,
+.story-node::after {
+  display: none;
+}
+
+.story-control,
+.story-like,
+.story-delete {
+  border: 0;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #292c36;
+  box-shadow: 0 9px 26px rgba(72, 76, 96, 0.16);
+}
+
+.story-control--close,
+.story-delete {
+  background: #ff6b72;
+  color: #ffffff;
+}
+
+.story-orbit-scene {
+  width: min(760px, 100vw);
+  height: 100dvh;
+}
+
+.story-orb-shell {
+  --orb-width: min(430px, calc(100vw - 30px));
+  --orb-height: min(760px, calc(100dvh - 42px));
+  width: var(--orb-width);
+  height: var(--orb-height);
+  animation: none;
+}
+
+.story-orb {
+  width: 100%;
+  height: 100%;
+  border-radius: 30px;
+  background: #ffffff;
+  box-shadow: 0 24px 70px rgba(72, 76, 96, 0.2);
+}
+
+.story-block img,
+.story-block video {
+  object-fit: contain;
+  background: #ffffff;
+}
+
+.story-progress-bars {
+  position: absolute;
+  z-index: 12;
+  top: 14px;
+  left: 16px;
+  right: 16px;
+  display: flex;
+  gap: 5px;
+}
+
+.story-progress-bars span {
+  flex: 1;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(40, 43, 54, 0.14);
+}
+
+.story-progress-bars i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #5b5df0;
+}
+
+.story-node {
+  border: 0;
+  background: #ffffff;
+  color: #292c36;
+  box-shadow: 0 10px 30px rgba(72, 76, 96, 0.16);
+}
+
+.story-node--author {
+  top: 30px;
+  left: calc(50% - min(205px, 43vw));
+}
+
+.story-node--time {
+  top: 30px;
+  right: calc(50% - min(205px, 43vw));
+}
+
+.story-node--caption {
+  left: 50%;
+  right: auto;
+  bottom: 34px;
+  width: min(390px, calc(100vw - 62px));
+  transform: translateX(-50%);
+}
+
+.story-node--actions {
+  right: calc(50% - min(205px, 43vw));
+  bottom: 104px;
+}
+
+.story-state {
+  position: fixed;
+  z-index: 230;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 14px;
+  padding: 24px;
+  background: #eef0f5;
+  color: #353844;
+  text-align: center;
+}
+
+.story-state > i {
+  font-size: 30px;
+  color: #5b5df0;
+}
+
+.story-state > div {
+  display: flex;
+  gap: 10px;
+}
+
+.story-state button {
+  border: 0;
+  border-radius: 999px;
+  padding: 10px 16px;
+  background: #ffffff;
+  color: #353844;
+  font: inherit;
+  font-weight: 800;
+  box-shadow: 0 8px 22px rgba(72, 76, 96, 0.14);
+}
+
+@media (max-width: 620px) {
+  .story-control-cluster {
+    top: max(12px, env(safe-area-inset-top));
+    right: 10px;
+  }
+
+  .story-orb-shell {
+    --orb-width: 100vw;
+    --orb-height: 100dvh;
+  }
+
+  .story-orb {
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .story-node--author {
+    top: max(16px, env(safe-area-inset-top));
+    left: 12px;
+    right: 150px;
+  }
+
+  .story-node--time {
+    display: none;
+  }
+
+  .story-node--caption {
+    left: 12px;
+    right: 12px;
+    bottom: max(14px, env(safe-area-inset-bottom));
+    width: auto;
+    transform: none;
+  }
+
+  .story-node--actions {
+    right: 12px;
+    bottom: calc(max(14px, env(safe-area-inset-bottom)) + 90px);
   }
 }
 </style>

@@ -16,10 +16,11 @@ declare module "@tiptap/core" {
 
 export const MediaFile = Node.create<MediaFileOptions>({
   name: "mediaFile",
-  group: "inline",
-  inline: true,
+  group: "block",
+  inline: false,
   atom: true,
   selectable: true,
+  draggable: true,
 
   addOptions() {
     return { onRemove: undefined };

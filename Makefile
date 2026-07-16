@@ -1,4 +1,5 @@
 COMPOSE ?= docker compose
+COMPOSE_PARALLEL_LIMIT ?= 3
 GRADLE ?= $(shell zsh -lc 'command -v gradle' 2>/dev/null || command -v gradle 2>/dev/null || echo gradle)
 DEV_ENV ?= dev/.env
 SHELL := /bin/zsh
@@ -52,7 +53,10 @@ backend-build: profile-build content-build
 
 dev: dev-env dev-keys dev-account-source
 	$(MAKE) account-build profile-build content-build
-	$(COMPOSE) --env-file $(DEV_ENV) -f dev/docker-compose.yml up --build
+	# Config files are bind-mounted, but Caddy and MediaStore read them only at
+	# process startup. Recreate containers so `make dev` always applies changes
+	# to routing and signed-upload endpoints without deleting persistent volumes.
+	COMPOSE_PARALLEL_LIMIT=$(COMPOSE_PARALLEL_LIMIT) $(COMPOSE) --env-file $(DEV_ENV) -f dev/docker-compose.yml up --build --force-recreate
 
 dev-account-source:
 	@dev/scripts/sync-account-source.sh

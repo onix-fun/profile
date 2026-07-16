@@ -59,7 +59,11 @@ export function extractStoryTags(caption: string): string[] {
 }
 
 export function isStorySeen(storyId: string): boolean {
-  return window.localStorage.getItem(`story-seen:${storyId}`) === "true";
+  try {
+    return window.localStorage.getItem(`story-seen:${storyId}`) === "true";
+  } catch {
+    return false;
+  }
 }
 
 export function mergeSeenState(items: StoryRailItem[]): StoryRailItem[] {

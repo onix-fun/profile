@@ -6,13 +6,14 @@ function joinUrl(base: string, path: string): string {
 }
 
 export function profileUrl(path: string, redirectBack = false): string {
+  if (isProfilePath(path.split("?")[0])) return path.startsWith("/") ? path : `/${path}`;
   const url = new URL(joinUrl(runtimeConfig.profileFrontendUrl, path));
   if (redirectBack) url.searchParams.set("redirect", window.location.href);
   return url.toString();
 }
 
 export function isProfilePath(path: string): boolean {
-  return path === "/search" || path.startsWith("/u/") || path.startsWith("/o/");
+  return path === "/me" || path === "/search" || path.startsWith("/u/") || path.startsWith("/o/");
 }
 
 export function accountSettingsUrl(redirectUrl: string): string {

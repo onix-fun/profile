@@ -59,6 +59,6 @@ fun profileRuntime(config: AppConfig): ProfileRuntime {
         content = content,
         repository = repository,
         collections = CollectionService(repository, content),
-        navigation = ProfileNavigationService(repository)
+        navigation = ProfileNavigationService(repository, config.env)
     )
 }

@@ -49,7 +49,7 @@ function closeMenu() {
 
 function openCreatePost() {
   closeMenu();
-  window.location.assign(contentUrl("/post/new", true));
+  window.location.assign(contentUrl("/p/new", true));
 }
 
 function openCreateStory() {

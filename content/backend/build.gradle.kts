@@ -64,8 +64,8 @@ sourceSets {
         proto {
             srcDir("../../shared-proto/account")
             srcDir("../../shared-proto/onix/provider/v1")
-            srcDir("../../shared-proto/onix/search/v1")
-            srcDir("../../shared-proto/onix/media/v1")
+            srcDir("../../shared-proto/onix/search")
+            srcDir("../../shared-proto/onix/media")
         }
     }
 }

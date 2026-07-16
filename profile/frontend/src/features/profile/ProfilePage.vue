@@ -10,6 +10,7 @@ import { contentUrl } from "@/api/navigation";
 import type { AccountProfile, ContentBlock, ProfileCanvasResponse, ProfileContentPost, ProfileNavButton, SavedCollection, SessionUser } from "@/api/types";
 import PostCloudNode from "@/features/content/PostCloudNode.vue";
 import SaveToCollectionsPopover from "@/features/content/SaveToCollectionsPopover.vue";
+import { filterProfileNavigation, postEmbedNavigation, serviceFilterParam, withEmbedQuery } from "@/features/embed/profileEmbed";
 import {
   buildProfileCanvasLayout,
   type PositionedProfileCanvasNode,
@@ -71,7 +72,7 @@ const canvasLayout = computed(() => (
 const canvasNodes = computed(() => canvasLayout.value?.nodes || []);
 const profilePosts = computed(() => response.value?.content?.posts || []);
 const profileCollections = computed(() => response.value?.content?.collections || []);
-const navButtons = computed<ProfileNavButton[]>(() => response.value?.navigation?.length
+const rawNavButtons = computed<ProfileNavButton[]>(() => response.value?.navigation?.length
   ? response.value.navigation
   : [{
       key: "collections",
@@ -84,6 +85,7 @@ const navButtons = computed<ProfileNavButton[]>(() => response.value?.navigation
       kind: "collections",
       backendOperation: "collections",
     }]);
+const navButtons = computed<ProfileNavButton[]>(() => filterProfileNavigation(rawNavButtons.value, route));
 const isOwner = computed(() => Boolean(response.value?.permissions.owner));
 const canvasStageStyle = computed<Record<string, string>>(() => {
   const stage = canvasLayout.value?.stage;
@@ -102,7 +104,7 @@ const modeNavStyle = computed<Record<string, string>>(() => {
   };
 });
 
-watch(() => [route.params.nickname, route.params.orgname, route.name], () => loadProfile(), { flush: "post" });
+watch(() => [route.params.nickname, route.params.orgname, route.name, route.query.from], () => loadProfile(), { flush: "post" });
 watch(canvasViewport, (element) => {
   resizeObserver?.disconnect();
   resizeObserver = null;
@@ -143,18 +145,18 @@ async function loadProfile() {
     if (!isOrganizationRoute.value && nickname.value === "me") {
       const actor = await ContentService.currentActor().catch(() => null);
       if (actor?.activeOwner?.ownerType === "ORGANIZATION") {
-        await router.replace(`/o/${encodeURIComponent(actor.activeOwner.username)}`);
+        await router.replace(withEmbedQuery(route, `/o/${encodeURIComponent(actor.activeOwner.username)}`));
         return;
       }
       if (currentUser.value) {
-        await router.replace(`/u/${currentUser.value.username}`);
+        await router.replace(withEmbedQuery(route, `/u/${currentUser.value.username}`));
         return;
       }
     }
 
     response.value = isOrganizationRoute.value
-      ? await ProfileService.getOrganization(nickname.value)
-      : await ProfileService.getProfile(nickname.value);
+      ? await ProfileService.getOrganization(nickname.value, serviceFilterParam(route))
+      : await ProfileService.getProfile(nickname.value, serviceFilterParam(route));
     if (!navButtons.value.some((button) => button.key === "posts") && activeMode.value === "posts") {
       activeMode.value = "collections";
     }
@@ -232,6 +234,7 @@ function nodeCollection(node: PositionedProfileCanvasNode): SavedCollection | un
 }
 
 function openPost(post: ProfileContentPost) {
+  if (postEmbedNavigation(route, { serviceKey: "content", path: `/p/${encodeURIComponent(post.id)}`, url: contentUrl(`/p/${encodeURIComponent(post.id)}`, true) })) return;
   window.location.assign(contentUrl(`/p/${encodeURIComponent(post.id)}`, true));
 }
 
@@ -241,22 +244,28 @@ function openSave(post: ProfileContentPost) {
 
 function openCollection(collection: SavedCollection) {
   const prefix = isOrganizationRoute.value ? "o" : "u";
-  void router.push(`/${prefix}/${encodeURIComponent(nickname.value)}/collections/${encodeURIComponent(collection.id)}`);
+  void router.push(withEmbedQuery(route, `/${prefix}/${encodeURIComponent(nickname.value)}/collections/${encodeURIComponent(collection.id)}`));
 }
 
 function handleNavButton(button: ProfileNavButton) {
   if (button.mode === "redirect" && button.targetPath) {
     if (button.targetService === "content") {
+      if (postEmbedNavigation(route, { serviceKey: "content", path: button.targetPath, url: button.targetUrl || contentUrl(button.targetPath, true) })) return;
       window.location.assign(contentUrl(button.targetPath, true));
       return;
     }
+    if (button.targetUrl) {
+      if (postEmbedNavigation(route, { serviceKey: button.targetService || button.serviceKey, path: button.targetPath, url: button.targetUrl })) return;
+      window.location.assign(button.targetUrl);
+      return;
+    }
     if (button.targetService === "profile" || !button.targetService) {
-      void router.push(button.targetPath);
+      void router.push(withEmbedQuery(route, button.targetPath));
       return;
     }
   }
   if ((button.kind === "route" || button.kind === "redirect") && button.route) {
-    void router.push(button.route);
+    void router.push(withEmbedQuery(route, button.route));
     return;
   }
   if (button.key === "collections" || button.kind === "collections" || button.backendOperation === "collections") {
@@ -336,7 +345,7 @@ async function createCollection() {
 
 function openSocial() {
   const prefix = isOrganizationRoute.value ? "o" : "u";
-  void router.push(`/${prefix}/${encodeURIComponent(nickname.value)}/social?filter=friends`);
+  void router.push(withEmbedQuery(route, `/${prefix}/${encodeURIComponent(nickname.value)}/social?filter=friends`));
 }
 
 async function togglePostLike(post: ProfileContentPost) {

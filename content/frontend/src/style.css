@@ -1,49 +1,80 @@
 @import "tailwindcss";
 
 :root {
-  font-family: "Roboto", Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: #212121;
-  background: #f4f6f8;
+  font-family: "Nunito", "Avenir Next", "Roboto", ui-rounded, ui-sans-serif, system-ui, sans-serif;
+  color: #17233c;
+  background: #f6fbff;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 
-  --bg: #f4f6f8;
+  --display-font: "Nunito", "Avenir Next", "Roboto", ui-rounded, sans-serif;
+  --bg: #f6fbff;
   --surface: #ffffff;
-  --surface-muted: #edf0f2;
-  --surface-raised: #ffffff;
-  --surface-active: #e1e5e8;
-  --text: #212121;
-  --muted: #667085;
-  --subtle: #98a2b3;
-  --accent: #475569;
-  --focus-ring: rgba(71, 85, 105, 0.2);
-  --success: #159a73;
-  --warning: #b7791f;
-  --danger: #c24141;
-  --shadow: 0 18px 42px rgba(22, 34, 51, 0.16);
-  --btn-primary-bg: var(--text);
+  --surface-muted: #e9f8ff;
+  --surface-raised: #fff8ee;
+  --surface-active: #9eea38;
+  --text: #17233c;
+  --muted: #52627e;
+  --subtle: #6c7a91;
+  --accent: #6856e9;
+  --focus-ring: #00a7ff;
+  --success: #66c800;
+  --warning: #ffb000;
+  --danger: #ff4c93;
+  --shadow: none;
+  --shadow-soft: none;
+  --btn-primary-bg: #6856e9;
   --btn-primary-text: #ffffff;
+
+  --comic-ink: #17233c;
+  --comic-paper: #f6fbff;
+  --comic-paper-bright: #ffffff;
+  --comic-lime: #9eea38;
+  --comic-cyan: #89e6ff;
+  --comic-coral: #ff5ab1;
+  --comic-magenta: #9a62ff;
+  --comic-yellow: #ffcb5c;
+  --comic-orange: #ff8a2a;
+  --comic-blue: #4e7cff;
+  --comic-line: 0 solid transparent;
+  --comic-radius: 24px;
+  --comic-shadow: none;
+  --comic-shadow-small: none;
+  --comic-text-shadow: none;
+
+  /* Content's constellation surfaces use these instead of the legacy comic layer. */
+  --constellation-ink: #1f2458;
+  --constellation-cobalt: #2f61ff;
+  --constellation-violet: #7546ed;
+  --constellation-pink: #ff4f9a;
+  --constellation-coral: #ff7045;
+  --constellation-lime: #82df36;
+  --constellation-orange: #ffad35;
+  --constellation-orbit: rgba(48, 65, 116, 0.34);
+  --constellation-highlight: rgba(255, 255, 255, 0.82);
+  --constellation-shadow: rgba(63, 80, 162, 0.24);
 }
 
 :root.dark {
-  --bg: #0d1117;
-  --surface: #161b22;
-  --surface-muted: #21262d;
-  --surface-raised: #1c2128;
-  --surface-active: #30363d;
-  --text: #e6edf3;
-  --muted: #8b949e;
-  --subtle: #6e7681;
-  --accent: #f0f6fc;
-  --focus-ring: rgba(240, 246, 252, 0.1);
-  --success: #3fb950;
-  --warning: #d29922;
-  --danger: #f85149;
-  --shadow: 0 18px 42px rgba(0, 0, 0, 0.6);
-  --btn-primary-bg: var(--accent);
-  --btn-primary-text: var(--bg);
+  --bg: #05070b;
+  --surface: #13171d;
+  --surface-muted: #1d2430;
+  --surface-raised: #181d24;
+  --surface-active: #26313d;
+  --text: #fffef2;
+  --muted: #b5bbc4;
+  --subtle: #79818d;
+  --accent: #14f768;
+  --focus-ring: rgba(246, 255, 24, 0.26);
+  --success: #14f768;
+  --warning: #f6ff18;
+  --danger: #ff4f7b;
+  --shadow: 8px 8px 0 rgba(0, 0, 0, 0.9);
+  --shadow-soft: 0 24px 70px rgba(0, 0, 0, 0.48);
+  --btn-primary-bg: #f6ff18;
+  --btn-primary-text: #05070b;
 }
 
 * {
@@ -63,15 +94,39 @@ body,
   line-height: 1.5;
 }
 
+body {
+  overflow-x: hidden;
+}
+
 button {
   font: inherit;
 }
 
+button,
+a,
+input,
+textarea,
+select {
+  outline-color: var(--focus-ring);
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
 .p-button {
-  border-radius: 8px !important;
+  border-radius: 999px !important;
   border: 0 !important;
   box-shadow: none !important;
-  font-weight: 700 !important;
+  font-family: var(--display-font) !important;
+  font-size: 12px !important;
+  letter-spacing: 0 !important;
+  font-weight: 400 !important;
 }
 
 .p-button:not(.p-button-text):not(.p-button-outlined) {
@@ -81,5 +136,38 @@ button {
 
 .p-message {
   border: 0 !important;
-  border-radius: 10px !important;
+  border-radius: 22px !important;
+  box-shadow: none !important;
+}
+
+.comic-display {
+  font-family: var(--display-font);
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.comic-panel {
+  border: 0;
+  border-radius: var(--comic-radius);
+  background: var(--comic-paper-bright);
+  box-shadow: none;
+}
+
+.comic-ticket {
+  clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 50%, calc(100% - 18px) 100%, 0 100%, 12px 50%);
+}
+
+.comic-jagged {
+  clip-path: polygon(0 12%, 8% 12%, 12% 0, 22% 10%, 36% 0, 46% 12%, 60% 4%, 70% 12%, 100% 12%, 94% 50%, 100% 88%, 78% 88%, 72% 100%, 58% 90%, 44% 100%, 34% 88%, 18% 96%, 12% 88%, 0 88%, 6% 50%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 1ms !important;
+  }
 }

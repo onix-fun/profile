@@ -175,6 +175,7 @@ export interface ProfileNavButton {
   route?: string | null;
   targetService?: "content" | "profile" | string | null;
   targetPath?: string | null;
+  targetUrl?: string | null;
   backendOperation?: string | null;
 }
 
@@ -431,7 +432,7 @@ export interface AccountSearchUser {
   bio?: string | null;
 }
 
-export type UnifiedSearchType = "POST" | "COLLECTION" | "COMMENT" | "TAG";
+export type UnifiedSearchType = "POST" | "COLLECTION" | "TAG";
 
 export interface SearchItem {
   type: UnifiedSearchType;

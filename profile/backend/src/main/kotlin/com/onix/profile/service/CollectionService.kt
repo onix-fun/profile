@@ -76,11 +76,24 @@ class CollectionService(
     }
 }
 
-class ProfileNavigationService(private val repository: ProfileRepository) {
-    fun navigation(ownerType: String, ownerId: String, ownerSlug: String? = null): List<ProfileNavButton> {
+class ProfileNavigationService(private val repository: ProfileRepository, private val env: Map<String, String> = System.getenv()) {
+    fun navigation(ownerType: String, ownerId: String, ownerSlug: String? = null, serviceFilter: Set<String> = emptySet()): List<ProfileNavButton> {
         val prefix = if (ownerType == "ORGANIZATION") "o" else "u"
         val slug = ownerSlug ?: ownerId
-        return repository.listNavButtons(ownerType, ownerId).map { button ->
+        val providers = repository.listProviders().associateBy { it.serviceKey }
+        return repository.listNavButtons(ownerType, ownerId)
+            .filter { button -> serviceFilter.isEmpty() || button.serviceKey == "profile" || button.serviceKey in serviceFilter }
+            .map { button ->
+            val route = button.frontendRouteTemplate
+                ?.replace("{ownerPrefix}", prefix)
+                ?.replace("{ownerSlug}", slug)
+                ?.replace("{ownerType}", ownerType)
+                ?.replace("{ownerId}", ownerId)
+            val targetPath = button.targetPathTemplate
+                ?.replace("{ownerPrefix}", prefix)
+                ?.replace("{ownerSlug}", slug)
+                ?.replace("{ownerType}", ownerType)
+                ?.replace("{ownerId}", ownerId)
             ProfileNavButton(
                 key = button.key,
                 serviceKey = button.serviceKey,
@@ -90,17 +103,17 @@ class ProfileNavigationService(private val repository: ProfileRepository) {
                 color = button.color,
                 mode = button.mode,
                 kind = button.kind,
-                route = button.frontendRouteTemplate
-                    ?.replace("{ownerPrefix}", prefix)
-                    ?.replace("{ownerSlug}", slug)
-                    ?.replace("{ownerType}", ownerType)
-                    ?.replace("{ownerId}", ownerId),
+                route = route,
                 targetService = button.targetService,
-                targetPath = button.targetPathTemplate
-                    ?.replace("{ownerPrefix}", prefix)
-                    ?.replace("{ownerSlug}", slug)
-                    ?.replace("{ownerType}", ownerType)
-                    ?.replace("{ownerId}", ownerId),
+                targetPath = targetPath,
+                targetUrl = targetPath?.let { path ->
+                    providers[button.targetService ?: button.serviceKey]
+                        ?.frontendBaseUrlEnv
+                        ?.let { env[it] }
+                        ?.takeIf(String::isNotBlank)
+                        ?.trimEnd('/')
+                        ?.let { base -> "$base${if (path.startsWith("/")) path else "/$path"}" }
+                },
                 backendOperation = button.backendOperation
             )
         }

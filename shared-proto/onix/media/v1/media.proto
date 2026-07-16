@@ -11,6 +11,32 @@ service MediaStore {
   rpc GetUploadSession(GetUploadSessionRequest) returns (GetUploadSessionResponse);
   rpc CreateReference(CreateReferenceRequest) returns (CreateReferenceResponse);
   rpc GetDownloadURL(GetDownloadURLRequest) returns (GetDownloadURLResponse);
+
+  // Asset uploads keep the legacy multipart flow, but attach a durable media
+  // identity and an asynchronous delivery pipeline to it.
+  rpc InitAssetUpload(InitAssetUploadRequest) returns (InitAssetUploadResponse);
+  rpc CompleteAssetUpload(CompleteAssetUploadRequest) returns (CompleteAssetUploadResponse);
+  rpc GetAsset(GetAssetRequest) returns (GetAssetResponse);
+  rpc RetryAssetProcessing(RetryAssetProcessingRequest) returns (RetryAssetProcessingResponse);
+  rpc ListAssetLifecycleEvents(ListAssetLifecycleEventsRequest) returns (ListAssetLifecycleEventsResponse);
+}
+
+// The lifecycle is intentionally independent from the underlying blob. A
+// source blob may be retained while an asset is PROCESSING, then removed after
+// all delivery variants are READY.
+enum AssetStatus {
+  ASSET_STATUS_UNSPECIFIED = 0;
+  ASSET_STATUS_UPLOADING = 1;
+  ASSET_STATUS_PROCESSING = 2;
+  ASSET_STATUS_READY = 3;
+  ASSET_STATUS_FAILED = 4;
+}
+
+enum ProcessingProfile {
+  PROCESSING_PROFILE_UNSPECIFIED = 0;
+  PROCESSING_PROFILE_CONTENT_IMAGE = 1;
+  PROCESSING_PROFILE_CONTENT_VIDEO = 2;
+  PROCESSING_PROFILE_CONTENT_AUDIO = 3;
 }
 
 message InitUploadRequest {
@@ -65,4 +91,96 @@ message GetDownloadURLRequest {
 
 message GetDownloadURLResponse {
   string url = 1;
+}
+
+message InitAssetUploadRequest {
+  string mime_type = 1;
+  int64 expected_size = 2;
+  int32 parts_count = 3;
+  ProcessingProfile profile = 4;
+  // Optional active-owner scope. Only x-onix-service=content may override
+  // the caller identity; a bare user id is normalized to content:<user-id>.
+  string owner_key = 5;
+}
+
+message InitAssetUploadResponse {
+  MediaAsset asset = 1;
+  string session_id = 2;
+  map<int32, string> parts = 3;
+  string expires_at = 4;
+}
+
+message CompleteAssetUploadRequest {
+  string asset_id = 1;
+  string session_id = 2;
+  repeated UploadPart parts = 3;
+  string owner_key = 4;
+}
+
+message CompleteAssetUploadResponse {
+  MediaAsset asset = 1;
+}
+
+message GetAssetRequest {
+  string asset_id = 1;
+  string owner_key = 2;
+}
+
+message GetAssetResponse {
+  MediaAsset asset = 1;
+}
+
+message RetryAssetProcessingRequest {
+  string asset_id = 1;
+  string owner_key = 2;
+}
+
+message RetryAssetProcessingResponse {
+  MediaAsset asset = 1;
+}
+
+message ListAssetLifecycleEventsRequest {
+  int64 after_sequence = 1;
+  int32 limit = 2;
+}
+
+message AssetLifecycleEvent {
+  int64 sequence = 1;
+  string event_id = 2;
+  string type = 3;
+  string asset_id = 4;
+  int64 generation = 5;
+  string owner_key = 6;
+  string failure_code = 7;
+  string created_at = 8;
+}
+
+message ListAssetLifecycleEventsResponse {
+  repeated AssetLifecycleEvent events = 1;
+}
+
+message MediaAsset {
+  string asset_id = 1;
+  AssetStatus status = 2;
+  ProcessingProfile profile = 3;
+  string source_blob_id = 4;
+  string mime_type = 5;
+  int32 width = 6;
+  int32 height = 7;
+  int64 duration_ms = 8;
+  repeated DeliveryVariant variants = 9;
+  DeliveryVariant poster = 10;
+  DeliveryVariant waveform = 11;
+  string failure_reason = 12;
+}
+
+message DeliveryVariant {
+  string name = 1;
+  string blob_id = 2;
+  string mime_type = 3;
+  string url = 4;
+  int32 width = 5;
+  int32 height = 6;
+  int64 duration_ms = 7;
+  int64 bitrate = 8;
 }

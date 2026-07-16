@@ -4,7 +4,7 @@ import { useRouter } from "vue-router";
 import { useToast } from "primevue/usetoast";
 import { profileUrl } from "@/api/navigation";
 import { ContentService } from "@/api/contentService";
-import type { CurrentActor, StoryBlock } from "@/api/types";
+import type { CurrentActor, PostAsset, StoryBlock } from "@/api/types";
 import {
   emptyStoryComposerState,
   extractStoryTags,
@@ -31,6 +31,9 @@ const recordingLimitTimer = ref<number | null>(null);
 const holdStartedRecording = ref(false);
 const holdThresholdMs = 260;
 const maxStoryVideoMs = 60_000;
+let recordingStartedAt = 0;
+const uploadProgress = ref(0);
+const publishStage = ref("");
 
 const isRecording = computed(() => state.value.status === "recording");
 const isEditing = computed(() => state.value.status === "edit" || state.value.status === "publishing");
@@ -105,10 +108,12 @@ function startRecording() {
   recorder.onstop = () => {
     clearRecordingLimitTimer();
     const blob = new Blob(recordedChunks.value, { type: recorder.mimeType || "video/webm" });
-    void setStoryFile(new File([blob], `story-${Date.now()}.webm`, { type: blob.type || "video/webm" }), maxStoryVideoMs);
+    const recordedDuration = Math.min(maxStoryVideoMs, Math.max(1_000, Date.now() - recordingStartedAt));
+    void setStoryFile(new File([blob], `story-${Date.now()}.webm`, { type: blob.type || "video/webm" }), recordedDuration);
     setState({ type: "STOP_RECORDING", mediaReady: true });
   };
   mediaRecorder.value = recorder;
+  recordingStartedAt = Date.now();
   recorder.start();
   clearRecordingLimitTimer();
   recordingLimitTimer.value = window.setTimeout(() => stopRecording(), maxStoryVideoMs);
@@ -179,11 +184,35 @@ function onRecordPointerUp(event: PointerEvent) {
 }
 
 async function setStoryFile(file: File, knownDurationMs: number | null = null) {
+  if (!isSupportedStoryFile(file)) {
+    permissionError.value = "Поддерживаются JPEG, PNG, WebP, MP4, WebM, MP3 и M4A/AAC.";
+    return;
+  }
+  const sizeLimit = file.type.startsWith("image/") ? 40 * 1024 * 1024 : 500 * 1024 * 1024;
+  if (!file.size || file.size > sizeLimit) {
+    permissionError.value = file.size ? "Файл слишком большой для истории." : "Пустой файл нельзя опубликовать.";
+    return;
+  }
+  permissionError.value = "";
   revokeMediaUrl();
   mediaFile.value = file;
-  mediaDurationMs.value = knownDurationMs ?? await readMediaDurationMs(file);
+  const duration = knownDurationMs ?? await readMediaDurationMs(file);
+  if ((file.type.startsWith("video/") || file.type.startsWith("audio/")) && duration && duration > maxStoryVideoMs + 250) {
+    mediaFile.value = null;
+    permissionError.value = "История может длиться не больше 60 секунд.";
+    return;
+  }
+  mediaDurationMs.value = duration;
   mediaUrl.value = URL.createObjectURL(file);
   setState({ type: "SELECT_FILE" });
+}
+
+function isSupportedStoryFile(file: File): boolean {
+  return new Set([
+    "image/jpeg", "image/png", "image/webp",
+    "video/mp4", "video/webm",
+    "audio/mpeg", "audio/mp4", "audio/aac", "audio/x-m4a",
+  ]).has(file.type.toLowerCase());
 }
 
 function onFileInput(event: Event) {
@@ -208,6 +237,27 @@ function storyDurationMetadata(file: File): Record<string, number> {
     durationMs: Math.round(duration),
     trimStartMs: 0,
     trimEndMs: Math.round(duration),
+  };
+}
+
+function processedStoryData(asset: PostAsset): Record<string, unknown> {
+  const preferred = asset.kind === "VIDEO"
+    ? ["video-1080"]
+    : asset.kind === "AUDIO"
+      ? ["audio"]
+      : ["image-1440", "image-960", "image-2048", "image-480"];
+  const variant = preferred.map((name) => asset.variants?.find((item) => item.name === name)).find(Boolean);
+  if (!asset.assetId || !asset.generation || !variant?.name) throw new Error("Media не подготовил версию для истории.");
+  return {
+    assetId: asset.assetId,
+    generation: asset.generation,
+    variantName: variant.name,
+    deliveryContract: "STABLE_V2",
+    mimeType: variant.mimeType,
+    width: variant.width,
+    height: variant.height,
+    posterVariantName: asset.variants?.some((item) => item.name === "poster") ? "poster" : undefined,
+    mediaDurationMs: asset.durationMs || mediaDurationMs.value || undefined,
   };
 }
 
@@ -245,14 +295,35 @@ async function publish() {
     return;
   }
   setState({ type: "PUBLISH" });
+  uploadProgress.value = 0;
   try {
+    publishStage.value = "Загружаем оригинал";
+    const uploaded = await ContentService.uploadMediaAsset(mediaFile.value, undefined, {
+      sourcePolicyId: "browser-capture-v1",
+      onProgress: (value) => { uploadProgress.value = Math.round(value * 55); },
+    });
+    const assetId = uploaded.assetId || uploaded.id;
+    publishStage.value = "Проверяем файл";
+    const available = await ContentService.waitForMediaAsset(assetId, {
+      onUpdate: () => { uploadProgress.value = Math.max(uploadProgress.value, 62); },
+    });
+    if (available.status === "FAILED" || available.status === "CANCELLED") {
+      throw new Error(available.failureReason || "Media отклонил файл истории.");
+    }
+    publishStage.value = "Готовим версию для просмотра";
+    const processing = await ContentService.retryMediaAssetProcessing(assetId);
+    const ready = processing.status === "READY"
+      ? processing
+      : await ContentService.waitForMediaAsset(assetId, {
+          onUpdate: () => { uploadProgress.value = Math.max(uploadProgress.value, 78); },
+        });
+    if (ready.status !== "READY") throw new Error(ready.failureReason || "Не удалось обработать историю.");
+    uploadProgress.value = 92;
     const block: StoryBlock = {
       id: crypto.randomUUID(),
       type: mediaType(mediaFile.value),
       data: {
-        fileName: mediaFile.value.name,
-        mimeType: mediaFile.value.type,
-        size: mediaFile.value.size,
+        ...processedStoryData(ready),
         caption: state.value.caption.trim(),
         tags: storyTags.value,
         ...storyDurationMetadata(mediaFile.value),
@@ -270,13 +341,15 @@ async function publish() {
         tags: storyTags.value,
         visibility: state.value.visibility,
       },
-      [mediaFile.value],
     );
+    uploadProgress.value = 100;
+    publishStage.value = "Опубликовано";
     toast.add({ severity: "success", summary: "Story published", life: 2500 });
     await router.push({ path: `/story/${story.id}`, query: { author: story.ownerId || story.authorId, ownerType: story.ownerType || "USER" } });
   } catch (error) {
     toast.add({ severity: "error", summary: "Story", detail: error instanceof Error ? error.message : "Unable to publish story", life: 5000 });
     setState({ type: "EDIT" });
+    publishStage.value = "";
   }
 }
 
@@ -319,7 +392,7 @@ onBeforeUnmount(() => {
       </div>
       <button v-if="isEditing" type="button" :disabled="state.status === 'publishing'" @click="publish">
         <i class="pi pi-send"></i>
-        <span>{{ state.status === "publishing" ? "Publishing" : "Publish" }}</span>
+        <span>{{ state.status === "publishing" ? "Публикуем" : "Опубликовать" }}</span>
       </button>
     </header>
 
@@ -352,7 +425,7 @@ onBeforeUnmount(() => {
           <i class="pi pi-refresh"></i>
         </button>
       </div>
-      <input ref="fileInput" type="file" accept="image/*,video/*,audio/*" @change="onFileInput" />
+      <input ref="fileInput" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm,audio/mpeg,audio/mp4,audio/aac" @change="onFileInput" />
     </main>
 
     <main v-else class="edit-stage">
@@ -386,9 +459,13 @@ onBeforeUnmount(() => {
           <span v-for="tag in storyTags" :key="tag">#{{ tag }}</span>
           <small v-if="!storyTags.length">Hashtags are read from the caption.</small>
         </div>
+        <div v-if="state.status === 'publishing'" class="story-publish-progress" role="status" aria-live="polite">
+          <span><i :style="{ width: `${uploadProgress}%` }"></i></span>
+          <small>{{ publishStage }} · {{ uploadProgress }}%</small>
+        </div>
         <button type="button" class="publish-story" :disabled="state.status === 'publishing'" @click="publish">
           <i class="pi pi-send"></i>
-          <span>{{ state.status === "publishing" ? "Publishing" : "Publish" }}</span>
+          <span>{{ state.status === "publishing" ? "Публикуем" : "Опубликовать" }}</span>
         </button>
       </aside>
     </main>
@@ -400,16 +477,18 @@ onBeforeUnmount(() => {
   min-height: 100dvh;
   overflow: hidden;
   background:
-    radial-gradient(circle at 18% 18%, rgba(45, 212, 191, 0.16), transparent 28%),
-    radial-gradient(circle at 82% 20%, rgba(129, 140, 248, 0.14), transparent 28%),
+    radial-gradient(circle at 18% 18%, rgba(0, 229, 255, 0.24), transparent 28%),
+    radial-gradient(circle at 82% 20%, rgba(255, 79, 123, 0.2), transparent 28%),
+    linear-gradient(142deg, rgba(246, 255, 24, 0.92) 0 13%, transparent 13%),
     #05070b;
   color: #ffffff;
 }
 
 .story-composer--edit {
   background:
-    radial-gradient(circle at 20% 20%, rgba(45, 212, 191, 0.14), transparent 30%),
-    radial-gradient(circle at 84% 18%, rgba(129, 140, 248, 0.14), transparent 28%),
+    radial-gradient(circle at 20% 20%, rgba(0, 229, 255, 0.2), transparent 30%),
+    radial-gradient(circle at 84% 18%, rgba(255, 79, 123, 0.18), transparent 28%),
+    linear-gradient(142deg, rgba(246, 255, 24, 0.9) 0 13%, transparent 13%),
     #05070b;
   color: #ffffff;
 }
@@ -435,21 +514,21 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  border: 0;
-  border-radius: 999px;
+  border: var(--comic-line);
+  border-radius: 8px;
   padding: 0 14px;
-  background: rgba(255, 255, 255, 0.16);
-  color: #ffffff;
+  background: var(--comic-paper-bright);
+  color: var(--comic-ink);
   font: inherit;
   font-weight: 900;
   cursor: pointer;
   pointer-events: auto;
+  box-shadow: var(--comic-shadow-small);
 }
 
 .story-composer--edit .story-topbar button {
-  background: rgba(255, 255, 255, 0.14);
-  color: #ffffff;
-  backdrop-filter: blur(16px);
+  background: var(--comic-paper-bright);
+  color: var(--comic-ink);
 }
 
 .story-topbar span {
@@ -469,13 +548,13 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 7px;
   max-width: min(260px, 46vw);
-  border-radius: 999px;
+  border: 3px solid var(--comic-ink);
+  border-radius: 8px;
   padding: 5px 9px 5px 5px;
-  background: rgba(255, 255, 255, 0.13);
-  color: #ffffff;
+  background: var(--comic-paper-bright);
+  color: var(--comic-ink);
   text-decoration: none;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
-  backdrop-filter: blur(16px);
+  box-shadow: var(--comic-shadow-small);
 }
 
 .story-owner-avatar {
@@ -484,9 +563,10 @@ onBeforeUnmount(() => {
   display: grid;
   place-items: center;
   overflow: hidden;
-  border-radius: 999px;
-  background: rgba(15, 23, 42, 0.72);
-  color: #ffffff;
+  border: 2px solid var(--comic-ink);
+  border-radius: 6px;
+  background: var(--comic-cyan);
+  color: var(--comic-ink);
   font-size: 11px;
 }
 
@@ -531,8 +611,11 @@ onBeforeUnmount(() => {
   justify-items: center;
   gap: 12px;
   padding: 22px;
-  border-radius: 12px;
-  background: rgba(15, 23, 42, 0.82);
+  border: var(--comic-line);
+  border-radius: 8px;
+  background: var(--comic-paper-bright);
+  color: var(--comic-ink);
+  box-shadow: var(--comic-shadow);
   text-align: center;
   backdrop-filter: blur(16px);
 }
@@ -543,13 +626,16 @@ onBeforeUnmount(() => {
 
 .camera-error button,
 .publish-story {
-  border: 0;
-  border-radius: 999px;
-  background: #ffffff;
-  color: #111827;
+  border: var(--comic-line);
+  border-radius: 8px;
+  background: var(--comic-yellow);
+  color: var(--comic-ink);
   font: inherit;
-  font-weight: 900;
+  font-family: var(--display-font);
+  font-size: 12px;
+  font-weight: 400;
   cursor: pointer;
+  box-shadow: var(--comic-shadow-small);
 }
 
 .camera-error button {
@@ -601,7 +687,7 @@ onBeforeUnmount(() => {
 
 .side-control,
 .record-button {
-  border: 0;
+  border: var(--comic-line);
   border-radius: 999px;
   cursor: pointer;
 }
@@ -611,19 +697,16 @@ onBeforeUnmount(() => {
   height: 58px;
   display: grid;
   place-items: center;
-  background: rgba(255, 255, 255, 0.14);
-  color: #ffffff;
+  background: var(--comic-paper-bright);
+  color: var(--comic-ink);
   font-size: 20px;
-  backdrop-filter: blur(16px);
-  box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.14),
-    0 16px 44px rgba(0, 0, 0, 0.26);
+  box-shadow: var(--comic-shadow-small);
   transition: transform 160ms ease, background 160ms ease;
 }
 
 .side-control:hover {
   transform: translateY(-2px);
-  background: rgba(255, 255, 255, 0.22);
+  background: var(--comic-yellow);
 }
 
 .side-control--hidden {
@@ -633,19 +716,17 @@ onBeforeUnmount(() => {
 .record-button {
   width: 86px;
   height: 86px;
-  border: 0;
+  border: var(--comic-line);
   background:
-    radial-gradient(circle, #ffffff 0 44%, transparent 45%),
-    conic-gradient(from 210deg, #22d3ee, #818cf8 42%, #ef4444 62%, #22c55e 84%, #22d3ee);
-  box-shadow:
-    0 0 0 8px rgba(255, 255, 255, 0.12),
-    0 0 42px rgba(45, 212, 191, 0.36);
+    radial-gradient(circle, var(--comic-paper-bright) 0 44%, transparent 45%),
+    conic-gradient(from 210deg, var(--comic-cyan), var(--comic-magenta) 42%, var(--comic-coral) 62%, var(--comic-lime) 84%, var(--comic-cyan));
+  box-shadow: var(--comic-shadow);
   transition: transform 140ms ease, border-radius 140ms ease, filter 140ms ease;
 }
 
 .record-button.active {
   border-radius: 28px;
-  filter: drop-shadow(0 0 28px rgba(239, 68, 68, 0.46));
+  filter: drop-shadow(0 0 28px rgba(255, 79, 123, 0.46));
   transform: scale(0.88) rotate(45deg);
 }
 
@@ -665,14 +746,12 @@ onBeforeUnmount(() => {
   width: min(420px, 82vw);
   aspect-ratio: 1;
   overflow: hidden;
-  border: 9px solid transparent;
+  border: var(--comic-line);
   border-radius: 999px;
   background:
     linear-gradient(#101827, #101827) padding-box,
-    conic-gradient(from 210deg, #22d3ee, #818cf8 40%, #22c55e 74%, #22d3ee) border-box;
-  box-shadow:
-    0 36px 110px rgba(0, 0, 0, 0.42),
-    0 0 44px rgba(45, 212, 191, 0.24);
+    conic-gradient(from 210deg, var(--comic-cyan), var(--comic-magenta) 40%, var(--comic-lime) 74%, var(--comic-cyan)) border-box;
+  box-shadow: var(--comic-shadow);
 }
 
 .phone-preview::before,
@@ -723,10 +802,11 @@ onBeforeUnmount(() => {
   bottom: 12%;
   max-height: 64px;
   overflow: hidden;
-  border-radius: 18px;
+  border: 3px solid var(--comic-ink);
+  border-radius: 8px;
   padding: 12px;
-  background: rgba(5, 7, 11, 0.58);
-  color: #ffffff;
+  background: var(--comic-paper-bright);
+  color: var(--comic-ink);
   font-weight: 800;
   line-height: 1.3;
   backdrop-filter: blur(14px);
@@ -735,13 +815,12 @@ onBeforeUnmount(() => {
 .story-edit-panel {
   display: grid;
   gap: 16px;
-  border-radius: 28px;
+  border: var(--comic-line);
+  border-radius: 8px;
   padding: 22px;
-  background: rgba(9, 13, 20, 0.56);
-  box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.12),
-    0 26px 70px rgba(0, 0, 0, 0.28);
-  backdrop-filter: blur(18px);
+  background: var(--comic-paper-bright);
+  color: var(--comic-ink);
+  box-shadow: var(--comic-shadow);
 }
 
 .story-edit-panel label {
@@ -750,7 +829,7 @@ onBeforeUnmount(() => {
 }
 
 .story-edit-panel label > span {
-  color: rgba(255, 255, 255, 0.62);
+  color: #46505a;
   font-size: 12px;
   font-weight: 900;
   text-transform: uppercase;
@@ -759,17 +838,17 @@ onBeforeUnmount(() => {
 .story-edit-panel textarea,
 .story-edit-panel select {
   width: 100%;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.1);
-  color: #ffffff;
+  border: 3px solid var(--comic-ink);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--comic-ink);
   font: inherit;
   font-weight: 800;
   outline: 0;
 }
 
 .story-edit-panel textarea::placeholder {
-  color: rgba(255, 255, 255, 0.44);
+  color: #73706a;
 }
 
 .story-edit-panel textarea {
@@ -792,15 +871,16 @@ onBeforeUnmount(() => {
 
 .story-tags span {
   padding: 7px 10px;
-  border-radius: 999px;
-  background: rgba(45, 212, 191, 0.14);
-  color: #99f6e4;
+  border: 2px solid var(--comic-ink);
+  border-radius: 6px;
+  background: var(--comic-cyan);
+  color: var(--comic-ink);
   font-size: 12px;
   font-weight: 900;
 }
 
 .story-tags small {
-  color: rgba(255, 255, 255, 0.56);
+  color: #46505a;
   font-weight: 800;
 }
 
@@ -817,6 +897,110 @@ onBeforeUnmount(() => {
 .publish-story:disabled {
   opacity: 0.6;
   cursor: wait;
+}
+
+.story-publish-progress {
+  display: grid;
+  gap: 7px;
+}
+
+.story-publish-progress > span {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e8eaf0;
+}
+
+.story-publish-progress i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #5b5df0;
+  transition: width 220ms ease;
+}
+
+.story-publish-progress small {
+  color: #5e6473;
+  font-weight: 700;
+}
+
+/* Story v2: media-first surfaces without the retired comic treatment. */
+.story-composer,
+.story-composer--edit {
+  background: #f3f4f7;
+  color: #1a1c24;
+}
+
+.story-topbar {
+  background: #f3f4f7;
+}
+
+.story-topbar button,
+.story-composer--edit .story-topbar button {
+  border: 0;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #232631;
+  box-shadow: 0 8px 24px rgba(88, 92, 112, 0.14);
+}
+
+.phone-preview {
+  width: min(390px, 82vw);
+  aspect-ratio: 9 / 16;
+  border: 0;
+  border-radius: 30px;
+  background: #ffffff;
+  box-shadow: 0 22px 60px rgba(73, 78, 100, 0.18);
+}
+
+.phone-preview::before,
+.phone-preview::after {
+  display: none;
+}
+
+.phone-preview img,
+.phone-preview video {
+  object-fit: contain;
+  background: #ffffff;
+}
+
+.caption-peek {
+  border: 0;
+  border-radius: 16px;
+  background: #ffffff;
+  color: #252834;
+  box-shadow: 0 10px 30px rgba(73, 78, 100, 0.15);
+}
+
+.story-edit-panel {
+  border: 0;
+  border-radius: 24px;
+  background: #ffffff;
+  color: #232631;
+  box-shadow: 0 18px 52px rgba(73, 78, 100, 0.14);
+}
+
+.story-edit-panel textarea,
+.story-edit-panel select {
+  border: 0;
+  border-radius: 14px;
+  background: #f1f2f6;
+  color: #232631;
+}
+
+.story-tags span {
+  border: 0;
+  border-radius: 999px;
+  background: #e8e7ff;
+  color: #4b46c8;
+}
+
+.publish-story {
+  border: 0;
+  border-radius: 999px;
+  background: #5b5df0;
+  color: #ffffff;
+  box-shadow: 0 12px 28px rgba(91, 93, 240, 0.28);
 }
 
 @media (max-width: 840px) {

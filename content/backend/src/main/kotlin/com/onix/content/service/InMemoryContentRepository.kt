@@ -1,14 +1,6 @@
 package com.onix.content.service
 
-import com.onix.content.domain.Comment
-import com.onix.content.domain.ContentBlockType
-import com.onix.content.domain.ContentMediaReference
-import com.onix.content.domain.ContentStatus
-import com.onix.content.domain.OwnerRef
-import com.onix.content.domain.OwnerType
-import com.onix.content.domain.Post
-import com.onix.content.domain.SavedCollection
-import com.onix.content.domain.Story
+import com.onix.content.domain.*
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import java.time.Instant
@@ -29,7 +21,16 @@ class InMemoryContentRepository : ContentRepository {
         val addedAt: Instant
     )
 
+    private data class RecommendationSlotKey(
+        val viewer: OwnerRef,
+        val postId: String
+    )
+
     private val posts = ConcurrentHashMap<String, Post>()
+    private val publications = ConcurrentHashMap<String, PostPublication>()
+    private val editorDocuments = ConcurrentHashMap<String, PostEditorDocument>()
+    private val mediaEventInbox = ConcurrentHashMap.newKeySet<String>()
+    @Volatile private var mediaEventSequence = 0L
     private val stories = ConcurrentHashMap<String, Story>()
     private val comments = ConcurrentHashMap<String, Comment>()
     private val collections = ConcurrentHashMap<String, SavedCollection>()
@@ -39,7 +40,13 @@ class InMemoryContentRepository : ContentRepository {
     private val storyLikes = ConcurrentHashMap.newKeySet<Pair<String, OwnerRef>>()
     private val commentLikes = ConcurrentHashMap.newKeySet<Pair<String, OwnerRef>>()
     private val postViews = ConcurrentHashMap<Pair<String, OwnerRef>, PostView>()
+    private val recommendationConstellations = ConcurrentHashMap<Pair<OwnerRef, String>, RecommendationConstellation>()
+    private val recommendationSlots = ConcurrentHashMap<RecommendationSlotKey, RecommendationPlacement>()
     private val storyViews = ConcurrentHashMap<String, Instant>()
+    private val pollVotes = ConcurrentHashMap<Triple<String, String, OwnerRef>, String>()
+    private val commentReports = ConcurrentHashMap.newKeySet<CommentReport>()
+    private val commentViewerHides = ConcurrentHashMap.newKeySet<Pair<String, OwnerRef>>()
+    private val postSearchProjections = ConcurrentHashMap<String, PostSearchProjection>()
 
     override fun savePost(post: Post): Post {
         posts[post.id] = post
@@ -53,14 +60,66 @@ class InMemoryContentRepository : ContentRepository {
 
     override fun deletePost(postId: String) {
         posts.remove(postId)
+        publications.remove(postId)
         comments.values.filter { it.postId == postId }.map { it.id }.forEach(::deleteComment)
         collectionItems.keys.filter { it.second == postId }.forEach(collectionItems::remove)
         postLikes.removeIf { it.first == postId }
         postViews.keys.filter { it.first == postId }.forEach(postViews::remove)
+        recommendationSlots.keys.filter { it.postId == postId }.forEach(recommendationSlots::remove)
         mediaReferences.removeIf { it.ownerType == "post" && it.ownerId == postId }
+        postSearchProjections.remove(postId)
     }
 
     override fun findPost(id: String): Post? = posts[id]?.takeIf { it.status == ContentStatus.ACTIVE }
+
+    override fun findStoredPost(id: String): Post? = posts[id]?.takeIf { it.status != ContentStatus.DELETED }
+    override fun findStoredPostByAssetId(assetId: String): Post? = posts.values.firstOrNull { post ->
+        post.status != ContentStatus.DELETED && post.assets.any { it.assetId == assetId }
+    }
+
+    override fun listDraftPosts(owner: OwnerRef, limit: Int): List<Post> =
+        posts.values
+            .filter { it.ownerType == owner.ownerType && it.ownerId == owner.ownerId && it.status == ContentStatus.DRAFT }
+            .sortedByDescending { it.updatedAt }
+            .take(limit)
+
+    override fun savePostEditorDocument(document: PostEditorDocument): PostEditorDocument {
+        editorDocuments[document.revisionId] = document
+        return document
+    }
+
+    override fun findPostEditorDocument(revisionId: String): PostEditorDocument? = editorDocuments[revisionId]
+
+    override fun findWorkingPostEditorDocument(postId: String): PostEditorDocument? = editorDocuments.values
+        .filter { it.postId == postId && it.state in setOf(PostRevisionState.DRAFT, PostRevisionState.PENDING_SOURCE, PostRevisionState.PROCESSING_MEDIA, PostRevisionState.NEEDS_ACTION) }
+        .maxByOrNull { it.revisionNo }
+
+    override fun updatePostEditorRevisionState(revisionId: String, state: PostRevisionState): PostEditorDocument? =
+        editorDocuments[revisionId]?.copy(state = state, updatedAt = Instant.now())?.also { editorDocuments[revisionId] = it }
+
+    override fun savePostPublication(publication: PostPublication): PostPublication {
+        publications[publication.draftId] = publication
+        return publication
+    }
+
+    @Synchronized
+    override fun activateMediaPublication(post: Post, publication: PostPublication): Pair<Post, PostPublication> {
+        posts[post.id] = post
+        publications[publication.draftId] = publication
+        return post to publication
+    }
+
+    override fun findPostPublication(draftId: String): PostPublication? = publications[draftId]
+
+    override fun listPendingPostPublications(limit: Int): List<PostPublication> =
+        publications.values
+            .filter { it.state in setOf(PostPublicationState.PENDING_SOURCE, PostPublicationState.PROCESSING_MEDIA, PostPublicationState.PENDING_MEDIA, PostPublicationState.NEEDS_MEDIA_ACTION) }
+            .sortedBy { it.requestedAt }
+            .take(limit)
+
+    override fun recordMediaLifecycleEvent(eventId: String): Boolean = mediaEventInbox.add(eventId)
+    override fun mediaLifecycleCursor(): Long = mediaEventSequence
+    override fun updateMediaLifecycleCursor(sequence: Long) { mediaEventSequence = maxOf(mediaEventSequence, sequence) }
 
     override fun listPostsByAuthor(authorId: String, limit: Int): List<Post> =
         listPostsByOwner(OwnerRef(OwnerType.USER, authorId), limit)
@@ -93,6 +152,49 @@ class InMemoryContentRepository : ContentRepository {
             .take(limit)
     }
 
+    @Synchronized
+    override fun reserveRecommendationPlacement(
+        viewer: OwnerRef,
+        postId: String,
+        constellationKey: String,
+        constellationFactory: (List<RecommendationConstellation>) -> RecommendationConstellation,
+        placementFactory: (RecommendationConstellation, List<RecommendationPlacement>) -> RecommendationPlacement
+    ): RecommendationPlacement {
+        val slotKey = RecommendationSlotKey(viewer, postId)
+        recommendationSlots[slotKey]?.let { return it }
+        val constellation = recommendationConstellations[viewer to constellationKey]
+            ?: constellationFactory(
+                recommendationConstellations
+                    .asSequence()
+                    .filter { it.key.first == viewer }
+                    .map { it.value }
+                    .sortedBy { it.key }
+                    .toList()
+            ).also { created ->
+                require(created.key == constellationKey) { "Constellation key must match placement key" }
+                recommendationConstellations[viewer to constellationKey] = created
+            }
+        val placement = placementFactory(
+            constellation,
+            recommendationSlots
+                .asSequence()
+                .filter { it.key.viewer == viewer }
+                .map { it.value }
+                .toList()
+        )
+        require(placement.constellationKey == constellationKey) { "Placement constellation key must match" }
+        recommendationSlots[slotKey] = placement
+        return placement
+    }
+
+    override fun listRecommendationConstellations(viewer: OwnerRef, keys: Set<String>): List<RecommendationConstellation> =
+        recommendationConstellations
+            .asSequence()
+            .filter { it.key.first == viewer && (keys.isEmpty() || it.key.second in keys) }
+            .map { it.value }
+            .sortedBy { it.key }
+            .toList()
+
     override fun setPostLike(postId: String, actor: OwnerRef, liked: Boolean) {
         val key = postId to actor
         if (liked) postLikes.add(key) else postLikes.remove(key)
@@ -121,6 +223,20 @@ class InMemoryContentRepository : ContentRepository {
 
     override fun countPostViewsByUser(postId: String, actor: OwnerRef): Long =
         postViews[postId to actor]?.viewCount ?: 0L
+
+    override fun setPollVote(postId: String, blockId: String, actor: OwnerRef, optionId: String) {
+        pollVotes[Triple(postId, blockId, actor)] = optionId
+    }
+
+    override fun pollVoteCounts(postId: String, blockId: String): Map<String, Long> =
+        pollVotes.asSequence()
+            .filter { it.key.first == postId && it.key.second == blockId }
+            .groupingBy { it.value }
+            .eachCount()
+            .mapValues { it.value.toLong() }
+
+    override fun pollVoteForActor(postId: String, blockId: String, actor: OwnerRef): String? =
+        pollVotes[Triple(postId, blockId, actor)]
 
     override fun setStoryLike(storyId: String, actor: OwnerRef, liked: Boolean) {
         val key = storyId to actor
@@ -159,6 +275,13 @@ class InMemoryContentRepository : ContentRepository {
     override fun findStory(id: String): Story? =
         stories[id]?.takeIf { it.status != ContentStatus.DELETED }
 
+    override fun findStoryByAssetId(assetId: String): Story? =
+        stories.values.firstOrNull { story ->
+            story.status != ContentStatus.DELETED && story.blocks.any { block ->
+                (block.data["assetId"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull == assetId
+            }
+        }
+
     override fun listActiveStories(now: Instant, limit: Int): List<Story> =
         stories.values
             .filter { it.status == ContentStatus.ACTIVE && it.expiresAt.isAfter(now) }
@@ -189,6 +312,23 @@ class InMemoryContentRepository : ContentRepository {
             .sortedByDescending { it.createdAt }
             .take(limit)
 
+    override fun listArchivedStoryPeriods(owner: OwnerRef, now: Instant, limit: Int): List<StoryArchivePeriod> =
+        stories.values
+            .asSequence()
+            .filter { story ->
+                story.ownerType == owner.ownerType && story.ownerId == owner.ownerId &&
+                    story.status != ContentStatus.DELETED &&
+                    (story.status == ContentStatus.ARCHIVED || !story.expiresAt.isAfter(now))
+            }
+            .groupBy { it.createdAt.toString().take(7) }
+            .entries
+            .sortedByDescending { it.key }
+            .take(limit)
+            .map { (period, storiesForPeriod) ->
+                StoryArchivePeriod(period, storiesForPeriod.size, storiesForPeriod.maxByOrNull { it.createdAt }?.id)
+            }
+            .toList()
+
     override fun recordStoryView(storyId: String, actor: OwnerRef, viewedAt: Instant) {
         storyViews["$storyId:${actor.ownerType}:${actor.ownerId}"] = viewedAt
     }
@@ -210,16 +350,56 @@ class InMemoryContentRepository : ContentRepository {
         comments.remove(commentId)
         comments.values.filter { it.parentId == commentId }.map { it.id }.forEach(::deleteComment)
         commentLikes.removeIf { it.first == commentId }
+        commentViewerHides.removeIf { it.first == commentId }
+        commentReports.removeIf { it.commentId == commentId }
         mediaReferences.removeIf { it.ownerType == "comment" && it.ownerId == commentId }
     }
 
-    override fun findComment(id: String): Comment? = comments[id]?.takeIf { it.status == ContentStatus.ACTIVE }
+    /**
+     * Deleted comments intentionally remain addressable: a reply may point to
+     * a tombstone and the thread must not lose its descendants.
+     */
+    override fun findComment(id: String): Comment? = comments[id]
 
     override fun listCommentsForPost(postId: String, limit: Int): List<Comment> =
         comments.values
-            .filter { it.postId == postId && it.status == ContentStatus.ACTIVE }
+            .filter { it.postId == postId && it.status != ContentStatus.HIDDEN }
             .sortedByDescending { it.createdAt }
             .take(limit)
+
+    override fun savePostSearchProjection(projection: PostSearchProjection): PostSearchProjection {
+        postSearchProjections[projection.postId] = projection
+        return projection
+    }
+
+    override fun findPostSearchProjection(postId: String): PostSearchProjection? = postSearchProjections[postId]
+
+    override fun setPinnedComment(postId: String, commentId: String?, pinnedAt: Instant?) {
+        synchronized(comments) {
+            comments.values
+                .filter { it.postId == postId && it.parentId == null && it.pinnedAt != null }
+                .forEach { comment -> comments[comment.id] = comment.copy(pinnedAt = null) }
+            if (commentId != null && pinnedAt != null) {
+                val comment = comments[commentId] ?: return
+                require(comment.postId == postId && comment.parentId == null) { "Only root comments can be pinned" }
+                comments[commentId] = comment.copy(pinnedAt = pinnedAt)
+            }
+        }
+    }
+
+    override fun saveCommentReport(report: CommentReport) {
+        commentReports.add(report)
+    }
+
+    override fun hideCommentForViewer(commentId: String, actor: OwnerRef) {
+        commentViewerHides.add(commentId to actor)
+    }
+
+    override fun hiddenCommentIdsForViewer(postId: String, actor: OwnerRef): Set<String> =
+        commentViewerHides.asSequence()
+            .filter { it.second == actor && comments[it.first]?.postId == postId }
+            .map { it.first }
+            .toSet()
 
     override fun saveCollection(collection: SavedCollection): SavedCollection {
         require(collections.values.none {

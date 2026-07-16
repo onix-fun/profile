@@ -102,6 +102,19 @@ fun Application.registerRoutes(config: AppConfig, account: AccountClient, media:
             call.respondMediaRedirect(media, account, content)
         }
 
+        get("/content-media/assets/{assetId}/source") {
+            call.respondStableAssetRedirect(media, account, content, source = true)
+        }
+        head("/content-media/assets/{assetId}/source") {
+            call.respondStableAssetRedirect(media, account, content, source = true)
+        }
+        get("/content-media/assets/{assetId}/{generation}/{variantName}") {
+            call.respondStableAssetRedirect(media, account, content, source = false)
+        }
+        head("/content-media/assets/{assetId}/{generation}/{variantName}") {
+            call.respondStableAssetRedirect(media, account, content, source = false)
+        }
+
         get("/internal/profile/users/{ownerId}/content") {
             val token = call.accessToken() ?: throw AccountUnauthorized()
             val actor = account.getCurrentActor(token)
@@ -154,7 +167,7 @@ fun Application.registerRoutes(config: AppConfig, account: AccountClient, media:
             val actor = token?.let {
                 account.getCurrentActor(it).also { current -> account.activateContentForUser(current.user.id, it) }
             }
-            call.respond(dispatchGraphQl(request, actor, account, content, token))
+            call.respond(dispatchGraphQl(request, actor, account, media, content, token))
         }
 
         webSocket("/subscriptions") {
@@ -173,6 +186,9 @@ private suspend fun handleMultipartUpload(call: ApplicationCall, actor: CurrentA
                 operations = json.decodeFromString(GraphQlRequest.serializer(), part.value)
             }
             is PartData.FileItem -> {
+                if (operations?.operationName == "createStory") {
+                    throw IllegalArgumentException("Stories require direct Media upload before createStory")
+                }
                 val fileName = part.originalFileName ?: "upload"
                 val mimeType = part.headers[HttpHeaders.ContentType]?.takeIf(String::isNotBlank) ?: "application/octet-stream"
                 val bytes = part.streamProvider().readBytes()
@@ -184,11 +200,12 @@ private suspend fun handleMultipartUpload(call: ApplicationCall, actor: CurrentA
     }
     val request = enrichUploads(operations ?: GraphQlRequest(operationName = "createPost", variables = buildJsonObject {
         put("input", buildJsonObject {
-            put("text", "Uploaded ${uploads.size} file(s)")
-            put("tags", JsonArray(listOf(JsonPrimitive("upload"))))
+            // A raw multipart request must become actual media blocks, not a
+            // text placeholder that can bypass the publication-content gate.
+            put("blocks", JsonArray(emptyList()))
         })
     }), uploads)
-    val response = dispatchGraphQl(request, actor, account, content, token)
+    val response = dispatchGraphQl(request, actor, account, media, content, token)
     referenceUploads(media, content, response, uploads)
     return response
 }
@@ -197,7 +214,7 @@ private fun enrichUploads(request: GraphQlRequest, uploads: List<UploadedMedia>)
     if (uploads.isEmpty()) return request
     val variables = request.variables ?: return request
     val input = variables["input"] as? JsonObject ?: return request
-    val blocks = input["blocks"]?.jsonArray ?: return request
+    val blocks = input["blocks"]?.jsonArray ?: JsonArray(emptyList())
     val enrichedBlocks = enrichUploadBlocks(blocks, uploads)
     val enrichedInput = JsonObject(input + ("blocks" to JsonArray(enrichedBlocks)))
     return request.copy(variables = JsonObject(variables + ("input" to enrichedInput)))
@@ -205,12 +222,12 @@ private fun enrichUploads(request: GraphQlRequest, uploads: List<UploadedMedia>)
 
 internal fun enrichUploadBlocks(blocks: JsonArray, uploads: List<UploadedMedia>): List<JsonElement> {
     var uploadIndex = 0
-    return blocks.map { element ->
+    val enriched = blocks.map { element ->
         val block = element.jsonObject
         val type = block["type"]?.jsonPrimitive?.contentOrNull
         val data = block["data"]?.jsonObject.orEmpty()
         val existingBlobId = data["blobId"]?.jsonPrimitive?.contentOrNull
-        if (type == "TEXT" || !existingBlobId.isNullOrBlank() || uploadIndex >= uploads.size) return@map element
+        if (type !in UPLOADABLE_BLOCK_TYPES || !existingBlobId.isNullOrBlank() || uploadIndex >= uploads.size) return@map element
         val upload = uploads[uploadIndex++]
         JsonObject(block + ("data" to JsonObject(data + mapOf(
             "blobId" to JsonPrimitive(upload.blobId),
@@ -218,15 +235,42 @@ internal fun enrichUploadBlocks(blocks: JsonArray, uploads: List<UploadedMedia>)
             "mimeType" to JsonPrimitive(upload.mimeType),
             "size" to JsonPrimitive(upload.size)
         ))))
+    }.toMutableList()
+    uploads.drop(uploadIndex).forEach { upload ->
+        enriched += JsonObject(mapOf(
+            "id" to JsonPrimitive(java.util.UUID.randomUUID().toString()),
+            "type" to JsonPrimitive(uploadBlockType(upload).name),
+            "data" to JsonObject(mapOf(
+                "blobId" to JsonPrimitive(upload.blobId),
+                "fileName" to JsonPrimitive(upload.fileName),
+                "mimeType" to JsonPrimitive(upload.mimeType),
+                "size" to JsonPrimitive(upload.size)
+            ))
+        ))
     }
+    return enriched
 }
+
+private fun uploadBlockType(upload: UploadedMedia): ContentBlockType = when {
+    upload.mimeType.startsWith("image/") -> ContentBlockType.IMAGE
+    upload.mimeType.startsWith("video/") -> ContentBlockType.VIDEO
+    upload.mimeType.startsWith("audio/") -> ContentBlockType.AUDIO
+    else -> ContentBlockType.FILE
+}
+
+private val UPLOADABLE_BLOCK_TYPES = setOf(
+    ContentBlockType.IMAGE.name,
+    ContentBlockType.VIDEO.name,
+    ContentBlockType.AUDIO.name,
+    ContentBlockType.FILE.name
+)
 
 private fun referenceUploads(media: MediaClient, content: ContentService, response: GraphQlResponse, uploads: List<UploadedMedia>) {
     if (uploads.isEmpty()) return
     val data = response.data ?: return
-    val created = data["createPost"]?.jsonObject ?: data["createStory"]?.jsonObject ?: data["createComment"]?.jsonObject ?: return
+    val created = data["createPost"]?.jsonObject ?: data["savePostDraft"]?.jsonObject ?: data["createStory"]?.jsonObject ?: data["createComment"]?.jsonObject ?: return
     val ownerType = when {
-        data.containsKey("createPost") -> "post"
+        data.containsKey("createPost") || data.containsKey("savePostDraft") -> "post"
         data.containsKey("createStory") -> "story"
         else -> "comment"
     }
@@ -264,10 +308,43 @@ private suspend fun ApplicationCall.respondMediaRedirect(media: MediaClient, acc
     respondRedirect(downloadUrl, permanent = false)
 }
 
+private suspend fun ApplicationCall.respondStableAssetRedirect(
+    media: MediaClient,
+    account: AccountClient,
+    content: ContentService,
+    source: Boolean
+) {
+    val token = accessToken()
+    val actor = token?.let { account.getCurrentActor(it) }
+    val assetId = parameters["assetId"] ?: throw IllegalArgumentException("assetId is required")
+    val generation = if (source) null else parameters["generation"]?.toLongOrNull()
+        ?: throw IllegalArgumentException("generation is required")
+    val owner = content.resolveStableAssetOwner(
+        assetId = assetId,
+        generation = generation,
+        source = source,
+        viewer = actor?.activeOwner?.ref(),
+        visibilityResolver = visibilityResolver(actor, account, token)
+    ) ?: run {
+        if (source && token == null) throw AccountUnauthorized()
+        return respond(HttpStatusCode.NotFound, GraphQlResponse(errors = listOf(GraphQlError("Media not found"))))
+    }
+    val url = try {
+        if (source) media.resolveSource(owner, assetId)
+        else media.resolveDelivery(owner, assetId, requireNotNull(generation), parameters["variantName"].orEmpty())
+    } catch (error: MediaUnavailable) {
+        return respond(mediaErrorStatus(error), GraphQlResponse(errors = listOf(GraphQlError(error.message ?: "Media unavailable"))))
+    }
+    response.headers.append(HttpHeaders.CacheControl, "private, no-store")
+    response.headers.append(HttpHeaders.Vary, "Authorization, Cookie")
+    respondRedirect(url, permanent = false)
+}
+
 private fun dispatchGraphQl(
     request: GraphQlRequest,
     actor: CurrentActor?,
     account: AccountClient?,
+    media: MediaClient,
     content: ContentService,
     token: String?
 ): GraphQlResponse {
@@ -279,6 +356,35 @@ private fun dispatchGraphQl(
         "currentActor" -> buildJsonObject {
             put("currentActor", json.encodeToJsonElement(requireActor(actor)))
         }
+        "initMediaAssetUpload" -> buildJsonObject {
+            val currentActor = requireActor(actor)
+            requireOwnerAction(account, token, currentActor, OwnerAction.CREATE_CONTENT)
+            put("initMediaAssetUpload", json.encodeToJsonElement(
+                media.initAssetUpload(currentActor.activeOwner.ref().key(), decodeInput(variables, InitAssetUploadInput.serializer()))
+            ))
+        }
+        "completeMediaAssetUpload" -> buildJsonObject {
+            val currentActor = requireActor(actor)
+            requireOwnerAction(account, token, currentActor, OwnerAction.CREATE_CONTENT)
+            put("completeMediaAssetUpload", json.encodeToJsonElement(
+                media.completeAssetUpload(currentActor.activeOwner.ref().key(), decodeInput(variables, CompleteAssetUploadInput.serializer()))
+            ))
+        }
+        "mediaAsset" -> buildJsonObject {
+            val currentActor = requireActor(actor)
+            val assetId = variables["assetId"]?.jsonPrimitive?.contentOrNull
+                ?: variables["id"]?.jsonPrimitive?.contentOrNull
+                ?: throw IllegalArgumentException("assetId is required")
+            put("mediaAsset", json.encodeToJsonElement(media.getAssetForOwner(currentActor.activeOwner.ref().key(), assetId)))
+        }
+        "retryMediaAssetProcessing" -> buildJsonObject {
+            val currentActor = requireActor(actor)
+            requireOwnerAction(account, token, currentActor, OwnerAction.CREATE_CONTENT)
+            val assetId = variables["assetId"]?.jsonPrimitive?.contentOrNull
+                ?: variables["id"]?.jsonPrimitive?.contentOrNull
+                ?: throw IllegalArgumentException("assetId is required")
+            put("retryMediaAssetProcessing", json.encodeToJsonElement(media.retryAssetProcessing(currentActor.activeOwner.ref().key(), assetId)))
+        }
         "createPost" -> buildJsonObject {
             val currentActor = requireActor(actor)
             requireOwnerAction(account, token, currentActor, OwnerAction.CREATE_CONTENT)
@@ -287,6 +393,89 @@ private fun dispatchGraphQl(
                 account.publishUserActivity("content.post:${post.id}:published", currentActor.user.id, UserActivityType.POST_PUBLISHED, "post", post.id, token)
             }
             put("createPost", json.encodeToJsonElement(post))
+        }
+        "savePostDraft" -> buildJsonObject {
+            val currentActor = requireActor(actor)
+            requireOwnerAction(account, token, currentActor, OwnerAction.CREATE_CONTENT)
+            put("savePostDraft", json.encodeToJsonElement(content.savePostDraft(currentActor, decodeInput(variables, SavePostDraftInput.serializer()))))
+        }
+        "createPostDraft" -> buildJsonObject {
+            val currentActor = requireActor(actor)
+            requireOwnerAction(account, token, currentActor, OwnerAction.CREATE_CONTENT)
+            put("createPostDraft", json.encodeToJsonElement(content.createPostDraft(currentActor)))
+        }
+        "beginPostEdit" -> buildJsonObject {
+            val currentActor = requireActor(actor)
+            requireOwnerAction(account, token, currentActor, OwnerAction.CREATE_CONTENT)
+            val postId = variables["postId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("postId is required")
+            put("beginPostEdit", json.encodeToJsonElement(content.beginPostEdit(currentActor, postId)))
+        }
+        "postEditorDocument" -> buildJsonObject {
+            val currentActor = requireActor(actor)
+            val revisionId = variables["revisionId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("revisionId is required")
+            put("postEditorDocument", json.encodeToJsonElement(content.postEditorDocument(currentActor, revisionId)))
+        }
+        "editorMediaAssets" -> buildJsonObject {
+            val currentActor = requireActor(actor)
+            val assetIds = variables["assetIds"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }
+                ?: throw IllegalArgumentException("assetIds are required")
+            put("editorMediaAssets", json.encodeToJsonElement(content.editorMediaAssets(currentActor, assetIds)))
+        }
+        "savePostEditorDocument" -> buildJsonObject {
+            val currentActor = requireActor(actor)
+            requireOwnerAction(account, token, currentActor, OwnerAction.CREATE_CONTENT)
+            put("savePostEditorDocument", json.encodeToJsonElement(content.savePostEditorDocument(
+                currentActor,
+                decodeInput(variables, SavePostEditorDocumentInput.serializer())
+            )))
+        }
+        "requestPostRevisionPublication" -> buildJsonObject {
+            val currentActor = requireActor(actor)
+            requireOwnerAction(account, token, currentActor, OwnerAction.CREATE_CONTENT)
+            val revisionId = variables["revisionId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("revisionId is required")
+            val idempotencyKey = variables["idempotencyKey"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("idempotencyKey is required")
+            put("requestPostRevisionPublication", json.encodeToJsonElement(
+                content.requestPostRevisionPublication(currentActor, revisionId, idempotencyKey)
+            ))
+        }
+        "postDrafts" -> buildJsonObject {
+            val currentActor = requireActor(actor)
+            val limit = variables["limit"]?.jsonPrimitive?.intOrNull ?: 40
+            put("postDrafts", json.encodeToJsonElement(content.listPostDrafts(currentActor, limit)))
+        }
+        "postDraft" -> buildJsonObject {
+            val currentActor = requireActor(actor)
+            val draftId = variables["draftId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("draftId is required")
+            put("postDraft", json.encodeToJsonElement(content.postDraft(currentActor, draftId)))
+        }
+        "publishPostDraft" -> buildJsonObject {
+            val currentActor = requireActor(actor)
+            requireOwnerAction(account, token, currentActor, OwnerAction.CREATE_CONTENT)
+            val draftId = variables["draftId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("draftId is required")
+            val post = content.publishPostDraft(currentActor, draftId)
+            if (account != null && token != null) {
+                account.publishUserActivity("content.post:${post.id}:published", currentActor.user.id, UserActivityType.POST_PUBLISHED, "post", post.id, token)
+            }
+            put("publishPostDraft", json.encodeToJsonElement(post))
+        }
+        "requestPostPublication" -> buildJsonObject {
+            val currentActor = requireActor(actor)
+            requireOwnerAction(account, token, currentActor, OwnerAction.CREATE_CONTENT)
+            put("requestPostPublication", json.encodeToJsonElement(content.requestPostPublication(
+                currentActor,
+                decodeInput(variables, RequestPostPublicationInput.serializer())
+            )))
+        }
+        "postPublication" -> buildJsonObject {
+            val currentActor = requireActor(actor)
+            val draftId = variables["draftId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("draftId is required")
+            put("postPublication", json.encodeToJsonElement(content.postPublication(currentActor, draftId)))
+        }
+        "cancelPostPublication" -> buildJsonObject {
+            val currentActor = requireActor(actor)
+            requireOwnerAction(account, token, currentActor, OwnerAction.CREATE_CONTENT)
+            val draftId = variables["draftId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("draftId is required")
+            put("cancelPostPublication", json.encodeToJsonElement(content.cancelPostPublication(currentActor, draftId)))
         }
         "createStory" -> buildJsonObject {
             val currentActor = requireActor(actor)
@@ -330,6 +519,24 @@ private fun dispatchGraphQl(
             content.deleteComment(currentActor, id)
             put("deleteComment", JsonPrimitive(true))
         }
+        "pinComment" -> buildJsonObject {
+            val currentActor = requireActor(actor)
+            requireOwnerAction(account, token, currentActor, OwnerAction.ACT_AS_OWNER)
+            val commentId = variables["commentId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("commentId is required")
+            val pinned = variables["pinned"]?.jsonPrimitive?.booleanOrNull ?: true
+            put("pinComment", json.encodeToJsonElement(content.pinComment(currentActor, commentId, pinned)))
+        }
+        "hideComment" -> buildJsonObject {
+            val currentActor = requireActor(actor)
+            requireOwnerAction(account, token, currentActor, OwnerAction.ACT_AS_OWNER)
+            val commentId = variables["commentId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("commentId is required")
+            put("hideComment", json.encodeToJsonElement(content.hideComment(currentActor, commentId)))
+        }
+        "reportComment" -> buildJsonObject {
+            val currentActor = requireActor(actor)
+            requireOwnerAction(account, token, currentActor, OwnerAction.ACT_AS_OWNER)
+            put("reportComment", JsonPrimitive(content.reportComment(currentActor, decodeInput(variables, ReportCommentInput.serializer()))))
+        }
         "deleteStory" -> buildJsonObject {
             val currentActor = requireActor(actor)
             val id = variables["id"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("id is required")
@@ -356,6 +563,10 @@ private fun dispatchGraphQl(
         "post" -> buildJsonObject {
             val id = variables["id"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("id is required")
             put("post", json.encodeToJsonElement(content.post(id, activeOwner, visibilityResolver(actor, account, token), authorResolver(actor?.user, account, token))))
+        }
+        "comment" -> buildJsonObject {
+            val id = variables["id"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("id is required")
+            put("comment", json.encodeToJsonElement(content.comment(id, activeOwner, visibilityResolver(actor, account, token), authorResolver(actor?.user, account, token))))
         }
         "story" -> buildJsonObject {
             val id = variables["id"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("id is required")
@@ -392,10 +603,22 @@ private fun dispatchGraphQl(
             val visibility = visibilityResolver(actor, account, token)(ownerKey)
             put("storyArchive", json.encodeToJsonElement(content.storyArchive(ownerId, visibility, owner, limit, cursor)))
         }
+        "storyArchivePeriods" -> buildJsonObject {
+            val ownerId = variables["ownerId"]?.jsonPrimitive?.content ?: activeOwner?.ownerId ?: throw IllegalArgumentException("ownerId is required")
+            val ownerType = variables["ownerType"]?.jsonPrimitive?.contentOrNull?.let { OwnerType.valueOf(it) } ?: activeOwner?.ownerType ?: OwnerType.USER
+            val ownerKey = OwnerRef(ownerType, ownerId).key()
+            val visibility = visibilityResolver(actor, account, token)(ownerKey)
+            val limit = variables["limit"]?.jsonPrimitive?.intOrNull ?: 60
+            put("storyArchivePeriods", json.encodeToJsonElement(content.storyArchivePeriods(ownerId, visibility, limit)))
+        }
         "comments" -> buildJsonObject {
             val postId = variables["postId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("postId is required")
             val limit = variables["limit"]?.jsonPrimitive?.intOrNull ?: 100
             put("comments", json.encodeToJsonElement(content.comments(postId, limit, activeOwner, visibilityResolver(actor, account, token), authorResolver(actor?.user, account, token))))
+        }
+        "commentThread" -> buildJsonObject {
+            val input = decodeInput(variables, CommentThreadInput.serializer())
+            put("commentThread", json.encodeToJsonElement(content.commentThread(input, activeOwner, visibilityResolver(actor, account, token), authorResolver(actor?.user, account, token))))
         }
         "profileContent" -> buildJsonObject {
             val ownerId = variables["ownerId"]?.jsonPrimitive?.content ?: activeOwner?.ownerId ?: throw IllegalArgumentException("ownerId is required")
@@ -480,6 +703,18 @@ private fun dispatchGraphQl(
             requireOwnerAction(account, token, currentActor, OwnerAction.ACT_AS_OWNER)
             put("unlikePost", json.encodeToJsonElement(content.unlikePost(currentActor, postId)))
         }
+        "votePoll" -> buildJsonObject {
+            val currentActor = requireActor(actor)
+            requireOwnerAction(account, token, currentActor, OwnerAction.ACT_AS_OWNER)
+            put("votePoll", json.encodeToJsonElement(content.votePoll(currentActor, decodeInput(variables, PollVoteInput.serializer()))))
+        }
+        "closePoll" -> buildJsonObject {
+            val currentActor = requireActor(actor)
+            requireOwnerAction(account, token, currentActor, OwnerAction.ACT_AS_OWNER)
+            val postId = variables["postId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("postId is required")
+            val blockId = variables["blockId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("blockId is required")
+            put("closePoll", json.encodeToJsonElement(content.closePoll(currentActor, postId, blockId)))
+        }
         "likeStory" -> buildJsonObject {
             val currentActor = requireActor(actor)
             val storyId = variables["storyId"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("storyId is required")
@@ -524,7 +759,7 @@ private fun dispatchGraphQl(
 
 private fun operationFromQuery(query: String?): String? {
     if (query.isNullOrBlank()) return null
-    return listOf("currentActor", "createPost", "updatePost", "deletePost", "createStory", "deleteStory", "createComment", "updateComment", "deleteComment", "recommendationFeed", "postCollections", "setPostCollections", "addPostToCollection", "removePostFromCollection", "createCollection", "updateCollection", "deleteCollection", "profileContent", "storyGroup", "storyArchive", "storiesFeed", "collections", "collection", "comments", "likePost", "unlikePost", "likeStory", "unlikeStory", "likeComment", "unlikeComment", "recordStoryView", "recordView", "feed", "post", "story")
+    return listOf("initMediaAssetUpload", "completeMediaAssetUpload", "mediaAsset", "editorMediaAssets", "retryMediaAssetProcessing", "currentActor", "createPostDraft", "beginPostEdit", "postEditorDocument", "savePostEditorDocument", "requestPostRevisionPublication", "savePostDraft", "postDrafts", "postDraft", "publishPostDraft", "requestPostPublication", "postPublication", "cancelPostPublication", "createPost", "updatePost", "deletePost", "createStory", "deleteStory", "createComment", "updateComment", "deleteComment", "pinComment", "hideComment", "reportComment", "commentThread", "comment", "votePoll", "closePoll", "recommendationFeed", "postCollections", "setPostCollections", "addPostToCollection", "removePostFromCollection", "createCollection", "updateCollection", "deleteCollection", "profileContent", "storyGroup", "storyArchivePeriods", "storyArchive", "storiesFeed", "collections", "collection", "comments", "likePost", "unlikePost", "likeStory", "unlikeStory", "likeComment", "unlikeComment", "recordStoryView", "recordView", "feed", "post", "story")
         .firstOrNull { query.contains(it) }
 }
 

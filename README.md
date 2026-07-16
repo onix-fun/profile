@@ -39,6 +39,7 @@ Local Caddy hosts:
 - `http://account.onix.localhost:8088`
 - `http://profile.onix.localhost:8088`
 - `http://content.onix.localhost:8088`
+- `http://media.onix.localhost:9010` (локальный S3 API для прямых media-upload)
 
 MailHog web UI is exposed at `http://localhost:8028` by default. Override it with `MAILHOG_HTTP_PORT` in `dev/.env` if that port is already in use.
 

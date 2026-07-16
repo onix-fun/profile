@@ -18,7 +18,7 @@ function remove() {
 </script>
 
 <template>
-  <NodeViewWrapper class="media-file-node" as="span" :data-type="attrs.type" contenteditable="false">
+  <NodeViewWrapper class="media-file-node" as="div" :data-type="attrs.type" contenteditable="false" data-drag-handle>
     <span v-if="attrs.type === 'IMAGE' && attrs.url" class="media-file-node__preview">
       <img :src="attrs.url" alt="" />
     </span>
@@ -27,12 +27,11 @@ function remove() {
     </span>
     <span v-else class="media-file-node__chip">
       <i :class="attrs.type === 'AUDIO' ? 'pi pi-volume-up' : 'pi pi-file'"></i>
-      <span>{{ attrs.name }}</span>
+      <span>Медиа</span>
     </span>
 
     <span class="media-file-node__capsule">
       <i :class="attrs.type === 'IMAGE' ? 'pi pi-image' : attrs.type === 'VIDEO' ? 'pi pi-video' : attrs.type === 'AUDIO' ? 'pi pi-volume-up' : 'pi pi-file'"></i>
-      <span>{{ attrs.name }}</span>
       <button type="button" aria-label="Remove file" @click.stop="remove">
         <i class="pi pi-times"></i>
       </button>

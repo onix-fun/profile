@@ -1,9 +1,11 @@
 package com.onix.content.search
 
 import com.onix.search.v1.SearchIndexGrpc
-import com.onix.search.v1.SearchIndexRequest
 import com.onix.search.v1.IngestEventsRequest
 import com.onix.search.v1.IndexEvent
+import com.onix.search.v2.SearchServiceGrpc
+import com.onix.search.v2.SearchRequest as SearchRequestV2
+import com.onix.search.v2.SearchMode
 import io.grpc.ManagedChannel
 import io.grpc.Metadata
 import io.grpc.StatusRuntimeException
@@ -11,6 +13,10 @@ import io.grpc.netty.GrpcSslContexts
 import io.grpc.netty.NettyChannelBuilder
 import io.grpc.stub.MetadataUtils
 import java.io.File
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 interface SearchIndexClient {
     fun search(collection: String, query: String, limit: Int): SearchIndexResult
@@ -69,16 +75,19 @@ class HttpSearchIndexClient(
 ) : SearchIndexClient, AutoCloseable {
     private val channel: ManagedChannel? = target?.takeIf(String::isNotBlank)?.let { channel(it, tls, trustCert, clientCert, clientKey) }
     private val stub: SearchIndexGrpc.SearchIndexBlockingStub? = channel?.let(SearchIndexGrpc::newBlockingStub)
+    private val searchV2: SearchServiceGrpc.SearchServiceBlockingStub? = channel?.let(SearchServiceGrpc::newBlockingStub)
 
     override fun search(collection: String, query: String, limit: Int): SearchIndexResult {
         if (query.isBlank()) return SearchIndexResult()
-        val current = stub ?: return SearchIndexResult(error = "Search index gRPC target is not configured")
+        val current = searchV2 ?: return SearchIndexResult(error = "Search index gRPC target is not configured")
         val response = runCatching {
             current.authed().search(
-                SearchIndexRequest.newBuilder()
+                SearchRequestV2.newBuilder()
                     .setCollection(collection)
                     .setQuery(query)
+                    .setMode(SearchMode.SEARCH_MODE_AUTO)
                     .setLimit(limit.coerceIn(1, 100))
+                    .setExplain(true)
                     .build()
             )
         }.getOrElse { error ->
@@ -91,7 +100,7 @@ class HttpSearchIndexClient(
         }
         return SearchIndexResult(
             hits = response.hitsList.map {
-                SearchIndexHit(id = it.id, score = it.score, snippet = it.snippet.takeIf(String::isNotBlank))
+                SearchIndexHit(id = it.id, score = it.score, snippet = searchSnippet(it.documentJson))
             },
             error = response.error.takeIf(String::isNotBlank)
         )
@@ -148,6 +157,14 @@ class HttpSearchIndexClient(
         return withInterceptors(MetadataUtils.newAttachHeadersInterceptor(headers))
     }
 
+    private fun SearchServiceGrpc.SearchServiceBlockingStub.authed(): SearchServiceGrpc.SearchServiceBlockingStub {
+        val headers = Metadata().apply {
+            put(AUTHORIZATION_KEY, "Bearer $apiKey")
+            put(SERVICE_KEY, "content")
+        }
+        return withInterceptors(MetadataUtils.newAttachHeadersInterceptor(headers))
+    }
+
     private companion object {
         val AUTHORIZATION_KEY: Metadata.Key<String> =
             Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER)
@@ -155,6 +172,13 @@ class HttpSearchIndexClient(
             Metadata.Key.of("x-onix-service", Metadata.ASCII_STRING_MARSHALLER)
     }
 }
+
+private fun searchSnippet(documentJson: String): String? = runCatching {
+    val document = Json.parseToJsonElement(documentJson).jsonObject
+    listOf("title", "content", "description")
+        .firstNotNullOfOrNull { key -> document[key]?.jsonPrimitive?.contentOrNull?.takeIf(String::isNotBlank) }
+        ?.take(240)
+}.getOrNull()
 
 private fun channel(target: String, tls: Boolean, trustCert: String?, clientCert: String?, clientKey: String?): ManagedChannel {
     val (host, port) = parseTarget(target)

@@ -4,21 +4,35 @@ import { redirectToAccount } from "@/api/authRedirect";
 import { runtimeConfig } from "@/runtime-config";
 import type {
   CommentItem,
+  CommentSort,
+  CommentThreadInput,
+  CommentThreadResponse,
   CommentReactionState,
-  ContentBlock,
+  ContentBlock, CommentDocumentV1,
   CollectionDetail,
   CreateCollectionInput,
   CreatePostInput,
   CreateStoryInput,
   CurrentActor,
+  CompletedMediaAssetPart,
   FeedItem,
+  InitMediaAssetUploadInput,
+  MediaAssetUploadPart,
+  MediaAssetUploadSession,
   PostCollectionsState,
+  PostAsset,
+  PostEditorDocument,
+  EditorMediaAssetResult,
+  SavePostEditorDocumentInput,
   RecommendationFeedInput,
   RecommendationFeedResponse,
   SavedCollection,
   PostReactionState,
+  PollVoteState,
+  SavePostDraftInput,
   Story,
   StoryArchiveResponse,
+  StoryArchivePeriodsResponse,
   StoryBlock,
   StoryGroup,
   StoryRailItem,
@@ -26,6 +40,25 @@ import type {
   UpdateCommentInput,
   UpdatePostInput,
 } from "@/api/types";
+
+/** Keep regular multipart parts safely above S3's 5 MiB lower bound. */
+export const MEDIA_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024;
+
+export interface UploadMediaAssetOptions {
+  signal?: AbortSignal;
+  sourcePolicyId?: "browser-native-v1" | "browser-capture-v1";
+  /** Called as soon as Content has reserved an asset id for this browser file. */
+  onReserved?: (asset: PostAsset) => void;
+  /** 0..1 progress through the direct PUTs. */
+  onProgress?: (progress: number) => void;
+}
+
+export interface PollMediaAssetOptions {
+  signal?: AbortSignal;
+  onUpdate?: (asset: PostAsset) => void;
+  /** Primarily useful for tests and deliberately bounded to prevent a runaway tab. */
+  maxAttempts?: number;
+}
 
 const graphql = axios.create({
   baseURL: runtimeConfig.graphqlUrl,
@@ -162,6 +195,119 @@ function itemCollectionsPath(ref: CollectionItemRef): string {
   return `/items/${encodeURIComponent(ref.serviceKey)}/${encodeURIComponent(ref.itemType)}/${encodeURIComponent(ref.itemId)}/collections`;
 }
 
+/** Browser object URLs are editor-only and must never reach the public API. */
+function serializeMediaInput<T extends { assets?: PostAsset[] }>(input: T): T {
+  if (!input.assets) return input;
+  return {
+    ...input,
+    assets: input.assets.map(({ previewUrl: _previewUrl, ...asset }) => asset),
+  };
+}
+
+/** Comment media uses the same asset contract, under the backend's explicit
+ * `attachments` field. Browser preview URLs are never persisted. */
+function serializeCommentMediaInput<T extends { attachments?: PostAsset[] }>(input: T): T {
+  if (!input.attachments) return input;
+  return {
+    ...input,
+    attachments: input.attachments.map(({ previewUrl: _previewUrl, ...asset }) => asset),
+  };
+}
+
+type RawMediaAsset = PostAsset & {
+  deliveryVariants?: PostAsset["variants"];
+  poster?: { url?: string | null } | null;
+  waveform?: { url?: string | null } | null;
+};
+
+function isMediaAssetStatus(value: unknown): value is PostAsset["status"] {
+  return value === "UPLOADING" || value === "PROCESSING" || value === "READY" || value === "FAILED";
+}
+
+/**
+ * MediaStore returns an asset record, whereas a post keeps a separate item id.
+ * Preserve the editor's local id so reordering/removal cannot race an upload,
+ * while copying the server asset id and delivery information into the post asset.
+ */
+function mergeUploadedAsset(remote: PostAsset, local?: PostAsset): PostAsset {
+  const raw = remote as RawMediaAsset;
+  const variants = raw.variants || raw.deliveryVariants || local?.variants;
+  const assetId = raw.assetId || raw.id || local?.assetId || null;
+  const posterUrl = raw.posterUrl || raw.poster?.url || local?.posterUrl || null;
+  const waveformUrl = raw.waveformUrl || raw.waveform?.url || local?.waveformUrl || null;
+  const status = isMediaAssetStatus(raw.status) ? raw.status : local?.status || "PROCESSING";
+  const firstDelivery = variants?.find((variant) => Boolean(variant.url))?.url || null;
+
+  return {
+    ...local,
+    ...remote,
+    id: local?.id || raw.id || assetId || crypto.randomUUID(),
+    clientId: local?.clientId,
+    kind: raw.kind || local?.kind || "IMAGE",
+    sourceKind: raw.sourceKind || local?.sourceKind || "UPLOAD",
+    assetId,
+    status,
+    variants,
+    url: raw.url || firstDelivery || local?.url || null,
+    posterUrl,
+    waveformUrl,
+    previewUrl: local?.previewUrl || raw.previewUrl || null,
+  };
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (!signal?.aborted) return;
+  throw new DOMException("Загрузка отменена", "AbortError");
+}
+
+function sleep(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("Загрузка отменена", "AbortError"));
+      return;
+    }
+    const timeout = window.setTimeout(resolve, milliseconds);
+    signal?.addEventListener("abort", () => {
+      window.clearTimeout(timeout);
+      reject(new DOMException("Загрузка отменена", "AbortError"));
+    }, { once: true });
+  });
+}
+
+async function putMediaPart(part: MediaAssetUploadPart, body: Blob, mimeType: string, signal?: AbortSignal): Promise<CompletedMediaAssetPart> {
+  throwIfAborted(signal);
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(part.headers || {})) {
+    if (typeof value === "string" && value) headers.set(name, value);
+  }
+  // Some stores sign Content-Type and provide it above; the fallback keeps
+  // simpler presigned endpoints type-aware without ever forwarding cookies.
+  if (!headers.has("content-type") && mimeType) headers.set("content-type", mimeType);
+
+  let response: Response;
+  try {
+    response = await fetch(part.url, {
+      method: "PUT",
+      headers,
+      body,
+      credentials: "omit",
+      signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw new Error("Не удалось подключиться к хранилищу медиа. Перезапустите локальный dev-стек и повторите загрузку.");
+  }
+  if (!response.ok) {
+    throw new Error(`Хранилище отклонило загрузку части ${part.partNumber} (HTTP ${response.status}).`);
+  }
+  const etag = response.headers.get("etag");
+  // Multipart completion is impossible without every ETag. Surface a precise
+  // deployment error instead of persisting an upload that MediaStore cannot
+  // finalize; the bucket CORS policy must expose this response header.
+  if (!etag) throw new Error("Хранилище не вернуло ETag части. Проверьте CORS для загрузки медиа.");
+  return { partNumber: part.partNumber, etag };
+}
+
 export class ContentService {
   static async currentActor(): Promise<CurrentActor> {
     const data = await request<{ currentActor: CurrentActor }>("currentActor", {}, { optionalAuth: true });
@@ -221,17 +367,87 @@ export class ContentService {
   }
 
   static async createPost(input: CreatePostInput, files: File[] = []): Promise<FeedItem["post"]> {
+    const mediaInput = serializeMediaInput(input);
     const data = files.length
-      ? await multipartRequest<{ createPost: FeedItem["post"] }>("createPost", { input }, files)
-      : await request<{ createPost: FeedItem["post"] }>("createPost", { input });
+      ? await multipartRequest<{ createPost: FeedItem["post"] }>("createPost", { input: mediaInput }, files)
+      : await request<{ createPost: FeedItem["post"] }>("createPost", { input: mediaInput });
     return data.createPost;
   }
 
   static async updatePost(input: UpdatePostInput, files: File[] = []): Promise<FeedItem["post"]> {
+    const mediaInput = serializeMediaInput(input);
     const data = files.length
-      ? await multipartRequest<{ updatePost: FeedItem["post"] }>("updatePost", { input }, files)
-      : await request<{ updatePost: FeedItem["post"] }>("updatePost", { input });
+      ? await multipartRequest<{ updatePost: FeedItem["post"] }>("updatePost", { input: mediaInput }, files)
+      : await request<{ updatePost: FeedItem["post"] }>("updatePost", { input: mediaInput });
     return data.updatePost;
+  }
+
+  static async savePostDraft(input: SavePostDraftInput, files: File[] = []): Promise<FeedItem["post"]> {
+    const mediaInput = serializeMediaInput(input);
+    const data = files.length
+      ? await multipartRequest<{ savePostDraft: FeedItem["post"] }>("savePostDraft", { input: mediaInput }, files)
+      : await request<{ savePostDraft: FeedItem["post"] }>("savePostDraft", { input: mediaInput });
+    return data.savePostDraft;
+  }
+
+  static async beginPostEdit(postId: string): Promise<PostEditorDocument> {
+    const data = await request<{ beginPostEdit: PostEditorDocument }>("beginPostEdit", { postId });
+    return data.beginPostEdit;
+  }
+
+  static async createPostDraft(): Promise<PostEditorDocument> {
+    const data = await request<{ createPostDraft: PostEditorDocument }>("createPostDraft", {});
+    return data.createPostDraft;
+  }
+
+  static async postEditorDocument(revisionId: string): Promise<PostEditorDocument> {
+    const data = await request<{ postEditorDocument: PostEditorDocument }>("postEditorDocument", { revisionId });
+    return data.postEditorDocument;
+  }
+
+  static async savePostEditorDocument(input: SavePostEditorDocumentInput): Promise<PostEditorDocument> {
+    const data = await request<{ savePostEditorDocument: PostEditorDocument }>("savePostEditorDocument", {
+      input: serializeMediaInput(input),
+    });
+    return data.savePostEditorDocument;
+  }
+
+  static async requestPostRevisionPublication(revisionId: string, idempotencyKey: string): Promise<import("@/api/types").PostPublication> {
+    const data = await request<{ requestPostRevisionPublication: import("@/api/types").PostPublication }>(
+      "requestPostRevisionPublication",
+      { revisionId, idempotencyKey },
+    );
+    return data.requestPostRevisionPublication;
+  }
+
+  static async postDrafts(limit = 40): Promise<FeedItem["post"][]> {
+    const data = await request<{ postDrafts: FeedItem["post"][] }>("postDrafts", { limit });
+    return data.postDrafts;
+  }
+
+  static async postDraft(draftId: string): Promise<FeedItem["post"]> {
+    const data = await request<{ postDraft: FeedItem["post"] }>("postDraft", { draftId });
+    return data.postDraft;
+  }
+
+  static async publishPostDraft(draftId: string): Promise<FeedItem["post"]> {
+    const data = await request<{ publishPostDraft: FeedItem["post"] }>("publishPostDraft", { draftId });
+    return data.publishPostDraft;
+  }
+
+  static async requestPostPublication(draftId: string, idempotencyKey: string): Promise<import("@/api/types").PostPublication> {
+    const data = await request<{ requestPostPublication: import("@/api/types").PostPublication }>("requestPostPublication", { draftId, idempotencyKey });
+    return data.requestPostPublication;
+  }
+
+  static async postPublication(draftId: string): Promise<import("@/api/types").PostPublication> {
+    const data = await request<{ postPublication: import("@/api/types").PostPublication }>("postPublication", { draftId });
+    return data.postPublication;
+  }
+
+  static async cancelPostPublication(draftId: string): Promise<import("@/api/types").PostPublication> {
+    const data = await request<{ cancelPostPublication: import("@/api/types").PostPublication }>("cancelPostPublication", { draftId });
+    return data.cancelPostPublication;
   }
 
   static async deletePost(id: string): Promise<boolean> {
@@ -242,6 +458,101 @@ export class ContentService {
   static async post(id: string): Promise<FeedItem["post"] | null> {
     const data = await request<{ post: FeedItem["post"] | null }>("post", { id });
     return data.post;
+  }
+
+  static async comment(id: string): Promise<CommentItem | null> {
+    const data = await request<{ comment: CommentItem | null }>("comment", { id });
+    return data.comment;
+  }
+
+  static async initMediaAssetUpload(input: InitMediaAssetUploadInput): Promise<MediaAssetUploadSession> {
+    const data = await request<{ initMediaAssetUpload: MediaAssetUploadSession }>("initMediaAssetUpload", { input });
+    if (!data.initMediaAssetUpload.sessionId || !data.initMediaAssetUpload.parts?.length) {
+      throw new Error("Сервис медиа не вернул адреса загрузки.");
+    }
+    return data.initMediaAssetUpload;
+  }
+
+  static async completeMediaAssetUpload(input: {
+    assetId: string;
+    sessionId: string;
+    parts: CompletedMediaAssetPart[];
+  }): Promise<PostAsset> {
+    const data = await request<{ completeMediaAssetUpload: PostAsset }>("completeMediaAssetUpload", { input });
+    return data.completeMediaAssetUpload;
+  }
+
+  static async mediaAsset(assetId: string): Promise<PostAsset> {
+    const data = await request<{ mediaAsset: PostAsset }>("mediaAsset", { assetId });
+    return data.mediaAsset;
+  }
+
+  static async editorMediaAssets(assetIds: string[]): Promise<EditorMediaAssetResult[]> {
+    if (!assetIds.length) return [];
+    const data = await request<{ editorMediaAssets: EditorMediaAssetResult[] }>("editorMediaAssets", { assetIds: [...new Set(assetIds)].slice(0, 12) });
+    return data.editorMediaAssets;
+  }
+
+  static async retryMediaAssetProcessing(assetId: string): Promise<PostAsset> {
+    const data = await request<{ retryMediaAssetProcessing: PostAsset }>("retryMediaAssetProcessing", { assetId });
+    return data.retryMediaAssetProcessing;
+  }
+
+  /**
+   * Uploads a local file directly to the signed MediaStore URLs. The Content
+   * API only brokers a short-lived session and never receives the original
+   * bytes, so a post can later reference the immutable `assetId`.
+   */
+  static async uploadMediaAsset(file: File, local?: PostAsset, options: UploadMediaAssetOptions = {}): Promise<PostAsset> {
+    if (!file.size) throw new Error("Пустой файл нельзя загрузить.");
+    const kind = local?.kind || (file.type.startsWith("video/") ? "VIDEO" : file.type.startsWith("audio/") ? "AUDIO" : "IMAGE");
+    const partsCount = Math.max(1, Math.ceil(file.size / MEDIA_UPLOAD_CHUNK_BYTES));
+    const session = await ContentService.initMediaAssetUpload({
+      mimeType: file.type || "application/octet-stream",
+      expectedSize: file.size,
+      partsCount,
+      kind,
+      sourcePolicyId: options.sourcePolicyId || "browser-native-v1",
+    });
+    const reserved = mergeUploadedAsset({ ...session.asset, status: "UPLOADING" }, local);
+    options.onReserved?.(reserved);
+
+    if (session.parts.length !== partsCount) {
+      throw new Error("Сервис медиа вернул неполный сеанс загрузки.");
+    }
+
+    const completed: CompletedMediaAssetPart[] = [];
+    for (let index = 0; index < session.parts.length; index += 1) {
+      throwIfAborted(options.signal);
+      const part = session.parts[index];
+      const start = index * MEDIA_UPLOAD_CHUNK_BYTES;
+      const body = file.slice(start, Math.min(file.size, start + MEDIA_UPLOAD_CHUNK_BYTES));
+      completed.push(await putMediaPart(part, body, file.type || "application/octet-stream", options.signal));
+      options.onProgress?.((index + 1) / session.parts.length);
+    }
+
+    const completedAsset = await ContentService.completeMediaAssetUpload({
+      assetId: reserved.assetId || session.asset.assetId || session.asset.id,
+      sessionId: session.sessionId,
+      parts: completed,
+    });
+    return mergeUploadedAsset(completedAsset, reserved);
+  }
+
+  /** Polls a processing asset only until MediaStore reaches a terminal state. */
+  static async waitForMediaAsset(assetId: string, options: PollMediaAssetOptions = {}): Promise<PostAsset> {
+    const maxAttempts = Math.max(1, options.maxAttempts ?? 120);
+    let last: PostAsset | null = null;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      throwIfAborted(options.signal);
+      const asset = await ContentService.mediaAsset(assetId);
+      last = asset;
+      options.onUpdate?.(asset);
+      if (asset.status === "AVAILABLE" || asset.status === "READY" || asset.status === "FAILED" || asset.status === "CANCELLED") return asset;
+      // Quick feedback after completion, then a capped cadence while codecs run.
+      await sleep(Math.min(4000, 700 + attempt * 160), options.signal);
+    }
+    throw new Error(last?.status === "VERIFYING" ? "Проверка файла занимает больше обычного." : "Не удалось получить статус медиа.");
   }
 
   static async uploadPostMedia(file: File): Promise<StoryBlock> {
@@ -297,7 +608,13 @@ export class ContentService {
     return data.storyArchive;
   }
 
+  static async storyArchivePeriods(ownerId: string, ownerType: "USER" | "ORGANIZATION" = "USER", limit = 60): Promise<StoryArchivePeriodsResponse> {
+    const data = await request<{ storyArchivePeriods: StoryArchivePeriodsResponse }>("storyArchivePeriods", { ownerId, ownerType, limit });
+    return data.storyArchivePeriods;
+  }
+
   static async createStory(input: CreateStoryInput, files: File[] = []): Promise<Story> {
+    if (files.length) throw new Error("Истории используют прямую загрузку в Media. Повторно выберите файл.");
     const normalized = {
       ...input,
       blocks: input.blocks.map((block) => ({
@@ -308,9 +625,7 @@ export class ContentService {
         },
       })),
     };
-    const data = files.length
-      ? await multipartRequest<{ createStory: Story }>("createStory", { input: normalized }, files)
-      : await request<{ createStory: Story }>("createStory", { input: normalized });
+    const data = await request<{ createStory: Story }>("createStory", { input: normalized });
     return data.createStory;
   }
 
@@ -329,15 +644,18 @@ export class ContentService {
     return data.unlikeStory;
   }
 
-  static async createComment(input: { postId: string; text: string; blocks?: ContentBlock[] }) {
-    const data = await request<{ createComment: CommentItem }>("createComment", { input });
+  static async createComment(input: { postId: string; text: string; blocks?: ContentBlock[]; attachments?: PostAsset[]; parentId?: string | null; replyToId?: string | null; document?: CommentDocumentV1 }) {
+    const data = await request<{ createComment: CommentItem }>("createComment", { input: serializeCommentMediaInput(input) });
     return data.createComment;
   }
 
-  static async createCommentWithFiles(input: { postId: string; text: string; blocks: ContentBlock[] }, files: File[] = []): Promise<CommentItem> {
+  /** Legacy helper retained for older callers. New comment media is uploaded
+   * directly through `uploadMediaAsset` and sent as `attachments`. */
+  static async createCommentWithFiles(input: { postId: string; text: string; blocks?: ContentBlock[]; attachments?: PostAsset[]; parentId?: string | null }, files: File[] = []): Promise<CommentItem> {
+    const mediaInput = serializeCommentMediaInput(input);
     const data = files.length
-      ? await multipartRequest<{ createComment: CommentItem }>("createComment", { input }, files)
-      : await request<{ createComment: CommentItem }>("createComment", { input });
+      ? await multipartRequest<{ createComment: CommentItem }>("createComment", { input: mediaInput }, files)
+      : await request<{ createComment: CommentItem }>("createComment", { input: mediaInput });
     return data.createComment;
   }
 
@@ -361,6 +679,39 @@ export class ContentService {
   static async comments(postId: string): Promise<CommentItem[]> {
     const data = await request<{ comments: CommentItem[] }>("comments", { postId });
     return data.comments;
+  }
+
+  static async commentThread(postOrInput: string | CommentThreadInput, sort: CommentSort = "TOP", limit = 100): Promise<CommentThreadResponse> {
+    const input: CommentThreadInput = typeof postOrInput === "string"
+      ? { postId: postOrInput, sort, limit }
+      : { sort: "TOP", limit: 30, ...postOrInput };
+    const data = await request<{ commentThread: CommentThreadResponse }>("commentThread", { input });
+    return data.commentThread;
+  }
+
+  static async pinComment(commentId: string, pinned = true): Promise<CommentItem> {
+    const data = await request<{ pinComment: CommentItem }>("pinComment", { commentId, pinned });
+    return data.pinComment;
+  }
+
+  static async hideComment(commentId: string): Promise<CommentItem> {
+    const data = await request<{ hideComment: CommentItem }>("hideComment", { commentId });
+    return data.hideComment;
+  }
+
+  static async reportComment(commentId: string, reason: string): Promise<boolean> {
+    const data = await request<{ reportComment: boolean }>("reportComment", { input: { commentId, reason } });
+    return data.reportComment;
+  }
+
+  static async votePoll(postId: string, blockId: string, optionId: string): Promise<PollVoteState> {
+    const data = await request<{ votePoll: PollVoteState }>("votePoll", { input: { postId, blockId, optionId } });
+    return data.votePoll;
+  }
+
+  static async closePoll(postId: string, blockId: string): Promise<PollVoteState> {
+    const data = await request<{ closePoll: PollVoteState }>("closePoll", { postId, blockId });
+    return data.closePoll;
   }
 
   static async likeComment(commentId: string): Promise<CommentReactionState> {

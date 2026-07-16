@@ -1,16 +1,11 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from "vue";
+import { Bookmark, CheckSquare, Globe2, Lock, Square, X } from "lucide-vue-next";
 import { ContentService } from "@/api/contentService";
 import type { SavedCollection } from "@/api/types";
 
-const props = defineProps<{
-  postId: string;
-}>();
-
-const emit = defineEmits<{
-  close: [];
-  saved: [collectionIds: string[]];
-}>();
+const props = defineProps<{ postId: string }>();
+const emit = defineEmits<{ close: []; saved: [collectionIds: string[]] }>();
 
 const collections = ref<SavedCollection[]>([]);
 const selected = ref<Set<string>>(new Set());
@@ -33,7 +28,7 @@ async function loadState() {
     collections.value = items;
     selected.value = new Set(state.collectionIds);
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : "Unable to load collections";
+    errorMessage.value = error instanceof Error ? error.message : "Не удалось загрузить коллекции";
   } finally {
     isLoading.value = false;
   }
@@ -54,7 +49,7 @@ async function save() {
     emit("saved", state.collectionIds);
     emit("close");
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : "Unable to save collections";
+    errorMessage.value = error instanceof Error ? error.message : "Не удалось сохранить коллекции";
   } finally {
     isSaving.value = false;
   }
@@ -63,48 +58,28 @@ async function save() {
 
 <template>
   <div class="collection-popover-backdrop" @click.self="emit('close')">
-    <section class="collection-popover" role="dialog" aria-label="Save to collections">
+    <section class="collection-popover" role="dialog" aria-modal="true" aria-label="Сохранить в коллекции">
       <header>
-        <strong>Save</strong>
-        <button type="button" aria-label="Close" @click="emit('close')">
-          <i class="pi pi-times"></i>
-        </button>
+        <strong>Сохранить в коллекции</strong>
+        <button type="button" aria-label="Закрыть" @click="emit('close')"><X :size="17" /></button>
       </header>
 
-      <div v-if="isLoading" class="collection-popover__state">
-        <i class="pi pi-spinner pi-spin"></i>
-        <span>Loading</span>
-      </div>
-
+      <div v-if="isLoading" class="collection-popover__state"><i class="pi pi-spinner pi-spin" /><span>Загружаем</span></div>
       <template v-else>
         <div class="collection-list">
-          <button
-            v-for="collection in collections"
-            :key="collection.id"
-            type="button"
-            class="collection-row"
-            :class="{ 'is-selected': selected.has(collection.id) }"
-            @click="toggle(collection.id)"
-          >
-            <i :class="selected.has(collection.id) ? 'pi pi-check-square' : 'pi pi-stop'"></i>
-            <span>
-              <strong>{{ collection.title }}</strong>
-              <small>{{ collection.itemCount }} posts</small>
-            </span>
-            <i :class="collection.visibility === 'PUBLIC' ? 'pi pi-globe' : 'pi pi-lock'"></i>
+          <button v-for="collection in collections" :key="collection.id" type="button" class="collection-row" :class="{ 'is-selected': selected.has(collection.id) }" @click="toggle(collection.id)">
+            <CheckSquare v-if="selected.has(collection.id)" :size="18" />
+            <Square v-else :size="18" />
+            <span><strong>{{ collection.title }}</strong><small>{{ collection.itemCount }} постов</small></span>
+            <Globe2 v-if="collection.visibility === 'PUBLIC'" :size="17" />
+            <Lock v-else :size="17" />
           </button>
-          <p v-if="!collections.length" class="collection-empty">No collections yet</p>
+          <p v-if="!collections.length" class="collection-empty">Коллекций пока нет.</p>
         </div>
-
       </template>
 
       <p v-if="errorMessage" class="collection-error">{{ errorMessage }}</p>
-      <footer>
-        <button type="button" class="collection-save" :disabled="isSaving || isLoading" @click="save">
-          <i class="pi pi-bookmark"></i>
-          <span>{{ isSaving ? "Saving" : "Done" }}</span>
-        </button>
-      </footer>
+      <footer><button type="button" class="collection-save" :disabled="isSaving || isLoading" @click="save"><Bookmark :size="17" /><span>{{ isSaving ? "Сохраняем" : "Готово" }}</span></button></footer>
     </section>
   </div>
 </template>
@@ -112,135 +87,46 @@ async function save() {
 <style scoped>
 .collection-popover-backdrop {
   position: fixed;
-  z-index: 40;
+  z-index: 150;
   inset: 0;
   display: grid;
   place-items: center;
   padding: 18px;
-  background: rgba(15, 23, 42, 0.18);
-  backdrop-filter: blur(6px);
+  background: rgba(40, 85, 255, .16);
+  backdrop-filter: blur(10px);
 }
 
 .collection-popover {
-  width: min(390px, calc(100vw - 28px));
+  width: min(400px, calc(100vw - 28px));
   max-height: min(640px, calc(100dvh - 28px));
   display: grid;
-  gap: 12px;
+  gap: 14px;
   overflow: hidden;
-  border: 1px solid var(--surface-active, rgba(15, 23, 42, 0.1));
-  border-radius: 12px;
-  padding: 14px;
-  background: var(--surface-raised, #ffffff);
-  color: var(--text, #111827);
-  box-shadow: 0 28px 90px rgba(15, 23, 42, 0.24);
+  padding: 18px;
+  background: #fff;
+  color: #17264b;
+  box-shadow: 0 22px 45px rgba(40, 85, 255, .25);
+  font-family: "Nunito", "Avenir Next", "Roboto", sans-serif;
 }
 
 .collection-popover header,
-.collection-popover footer {
-  display: flex;
-  align-items: center;
-}
-
-.collection-popover header {
-  justify-content: space-between;
-}
-
-.collection-popover header strong {
-  font-size: 17px;
-  font-weight: 900;
-}
-
-.collection-popover button {
-  font: inherit;
-}
-
-.collection-popover header button {
-  width: 34px;
-  height: 34px;
-  border: 0;
-  border-radius: 999px;
-  display: grid;
-  place-items: center;
-  background: var(--surface-muted, #eef2f7);
-  color: var(--muted, #64748b);
-  cursor: pointer;
-}
-
-.collection-list {
-  display: grid;
-  gap: 7px;
-  overflow-y: auto;
-  padding-right: 2px;
-}
-
-.collection-row {
-  min-width: 0;
-  min-height: 52px;
-  border: 1px solid var(--surface-active, #e2e8f0);
-  border-radius: 10px;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 10px;
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.collection-row.is-selected {
-  border-color: #0f766e;
-  background: rgba(20, 184, 166, 0.1);
-}
-
-.collection-row span {
-  min-width: 0;
-  display: grid;
-  gap: 2px;
-}
-
+.collection-popover footer { display: flex; align-items: center; }
+.collection-popover header { justify-content: space-between; gap: 14px; }
+.collection-popover header strong { font-size: 18px; line-height: 1.15; }
+.collection-popover button { font: inherit; }
+.collection-popover header button { width: 34px; height: 34px; display: grid; place-items: center; border: 0; border-radius: 50%; background: #ff4fa3; color: #fff; cursor: pointer; }
+.collection-list { display: grid; gap: 8px; overflow-y: auto; padding-right: 2px; }
+.collection-row { min-width: 0; min-height: 56px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; border: 0; padding: 10px 12px; background: #e9efff; color: inherit; text-align: left; cursor: pointer; }
+.collection-row.is-selected { background: #b8f348; box-shadow: 0 9px 18px rgba(184, 243, 72, .24); }
+.collection-row span { min-width: 0; display: grid; gap: 2px; }
 .collection-row strong,
-.collection-row small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
+.collection-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .collection-row small,
 .collection-empty,
-.collection-error {
-  color: var(--muted, #64748b);
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.collection-save:disabled {
-  cursor: default;
-  opacity: 0.55;
-}
-
-.collection-save {
-  width: 100%;
-  min-height: 42px;
-  border: 0;
-  border-radius: 999px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  background: var(--btn-primary-bg, #111827);
-  color: var(--btn-primary-text, #ffffff);
-  font-weight: 900;
-  cursor: pointer;
-}
-
-.collection-popover__state {
-  min-height: 110px;
-  display: grid;
-  place-items: center;
-  gap: 6px;
-  color: var(--muted, #64748b);
-  font-weight: 900;
-}
+.collection-error { margin: 0; color: #64749a; font-size: 12px; font-weight: 800; }
+.collection-error { color: #d12670; }
+.collection-save { width: 100%; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 0; border-radius: 999px; background: #2855ff; color: #fff; box-shadow: 0 8px 18px rgba(40, 85, 255, .25); font-weight: 900; cursor: pointer; }
+.collection-save:disabled { opacity: .55; cursor: default; }
+.collection-popover__state { min-height: 110px; display: grid; place-items: center; gap: 7px; color: #64749a; font-weight: 900; }
+.collection-popover button:focus-visible { outline: 3px solid #2855ff; outline-offset: 3px; }
 </style>

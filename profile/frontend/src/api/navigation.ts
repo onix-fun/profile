@@ -12,5 +12,5 @@ export function contentUrl(path: string, redirectBack = false): string {
 }
 
 export function isContentPath(path: string): boolean {
-  return path === "/post/new" || path === "/story/new" || path.startsWith("/p/") || path.startsWith("/story/");
+  return path === "/story/new" || path.startsWith("/p/") || path.startsWith("/story/");
 }

@@ -3,6 +3,7 @@ import { runtimeConfig } from "@/runtime-config";
 import { redirectToAccount } from "@/api/authRedirect";
 import { ProfileService } from "@/api/profileService";
 import { contentUrl, isContentPath } from "@/api/navigation";
+import { isEmbeddedProfile, postEmbedNavigation } from "@/features/embed/profileEmbed";
 
 let sessionCheck: Promise<unknown> | null = null;
 const ExternalRedirect = { template: "<span />" };
@@ -25,20 +26,18 @@ export const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      path: "/me",
+      name: "ProfileMe",
+      component: () => import("@/features/profile/ProfileHomeRedirect.vue"),
+      meta: { requiresAuth: true },
+    },
+    {
       path: "/search",
       name: "Search",
       component: () => import("@/features/content/SearchPage.vue"),
     },
     {
       path: "/p/:postId",
-      component: ExternalRedirect,
-      beforeEnter: (to) => {
-        window.location.assign(contentUrl(to.fullPath, true));
-        return false;
-      },
-    },
-    {
-      path: "/post/new",
       component: ExternalRedirect,
       beforeEnter: (to) => {
         window.location.assign(contentUrl(to.fullPath, true));
@@ -102,6 +101,9 @@ export const router = createRouter({
 
 router.beforeEach(async (to) => {
   if (isContentPath(to.path)) {
+    if (isEmbeddedProfile(to) && postEmbedNavigation(to, { serviceKey: "content", path: to.fullPath, url: contentUrl(to.fullPath, true) })) {
+      return false;
+    }
     window.location.assign(contentUrl(to.fullPath, true));
     return false;
   }

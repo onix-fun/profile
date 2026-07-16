@@ -19,6 +19,9 @@ import com.onix.content.search.SearchOutboxWorker
 import com.onix.content.service.ContentRepository
 import com.onix.content.service.ContentService
 import com.onix.content.service.InMemoryContentRepository
+import com.onix.content.service.PublicationReconciliationWorker
+import com.onix.content.service.UploadedAssetVerifier
+import com.onix.content.service.MediaAssetProcessor
 import io.grpc.ServerInterceptors
 import io.grpc.netty.NettyServerBuilder
 import io.ktor.server.application.*
@@ -40,6 +43,7 @@ fun main() {
         runtime.media.close()
         runtime.profileUsage.close()
         runtime.searchOutbox?.close()
+        runtime.publicationReconciler.close()
         (runtime.searchIndex as? AutoCloseable)?.close()
     })
     embeddedServer(Netty, port = config.httpPort, host = config.httpHost) {
@@ -62,7 +66,8 @@ data class ContentRuntime(
     val content: ContentService,
     val profileUsage: ProfileUsageReporter,
     val searchIndex: SearchIndexClient,
-    val searchOutbox: SearchOutboxWorker?
+    val searchOutbox: SearchOutboxWorker?,
+    val publicationReconciler: PublicationReconciliationWorker
 )
 
 fun contentRuntime(config: AppConfig): ContentRuntime {
@@ -86,24 +91,40 @@ fun contentRuntime(config: AppConfig): ContentRuntime {
         clientKey = config.searchGrpcClientKey
     )
     val searchOutbox = dataSource?.let { SearchOutboxWorker(it, searchIndex).start() }
+    val media = MediaClient(
+        target = config.mediaGrpcUrl,
+        apiKey = config.mediaApiKey,
+        tls = config.mediaGrpcTls,
+        trustCert = config.mediaGrpcTrustCert,
+        clientCert = config.mediaGrpcClientCert,
+        clientKey = config.mediaGrpcClientKey
+    )
+    val content = ContentService(
+        repository = repository,
+        searchEvents = OutboxSearchEventPublisher(dataSource),
+        searchIndex = searchIndex,
+        profileUsage = profileUsage,
+        uploadedAssetVerifier = object : UploadedAssetVerifier {
+            override fun asset(owner: String, assetId: String) =
+                runCatching { media.getAssetForOwner(owner, assetId) }.getOrNull()
+
+            override fun assets(owner: String, assetIds: List<String>) =
+                runCatching { media.getAssetsForOwner(owner, assetIds) }.getOrDefault(emptyMap())
+        },
+        mediaAssetProcessor = object : MediaAssetProcessor {
+            override fun request(owner: String, assetId: String, kind: com.onix.content.domain.PostAssetKind, idempotencyKey: String) =
+                media.requestProcessing(owner, assetId, kind, idempotencyKey)
+            override fun cancel(owner: String, runId: String) = media.cancelProcessing(owner, runId)
+            override fun releaseSource(owner: String, assetId: String, generation: Long) = media.releaseSource(owner, assetId, generation)
+        }
+    )
     return ContentRuntime(
         account = account,
-        media = MediaClient(
-            target = config.mediaGrpcUrl,
-            apiKey = config.mediaApiKey,
-            tls = config.mediaGrpcTls,
-            trustCert = config.mediaGrpcTrustCert,
-            clientCert = config.mediaGrpcClientCert,
-            clientKey = config.mediaGrpcClientKey
-        ),
+        media = media,
         profileUsage = profileUsage,
         searchIndex = searchIndex,
         searchOutbox = searchOutbox,
-        content = ContentService(
-            repository = repository,
-            searchEvents = OutboxSearchEventPublisher(dataSource),
-            searchIndex = searchIndex,
-            profileUsage = profileUsage
-        )
+        content = content,
+        publicationReconciler = PublicationReconciliationWorker(content, media).start()
     )
 }
