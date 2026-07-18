@@ -1,20 +1,20 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { createMemoryHistory, createRouter } from "vue-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ProfileService } from "@/api/profileService";
-import SearchPage from "@/features/content/SearchPage.vue";
+import { ProfileService } from "@/shared/api/profileService";
+import SearchPage from "@/pages/search/SearchPage.vue";
 
 vi.mock("primevue/usetoast", () => ({
   useToast: () => ({ add: vi.fn() }),
 }));
 
-vi.mock("@/api/contentService", () => ({
+vi.mock("@/shared/api/contentService", () => ({
   ContentService: {
     recommendationFeed: vi.fn().mockResolvedValue({ items: [] }),
   },
 }));
 
-vi.mock("@/api/profileService", () => ({
+vi.mock("@/shared/api/profileService", () => ({
   ProfileService: {
     searchSuggest: vi.fn().mockResolvedValue({ query: "media", suggestions: [], partialErrors: [] }),
     search: vi.fn().mockResolvedValue({

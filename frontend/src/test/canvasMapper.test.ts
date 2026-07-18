@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { accountSettingsUrl } from "@/features/profile/accountLinks";
-import { buildCollectionCanvasLayout } from "@/features/profile/collectionCanvasLayout";
-import { buildProfileCanvasLayout, ORBIT_OFFSETS } from "@/features/profile/profileCanvasLayout";
-import { buildSocialCanvasLayout, socialNodesOverlap } from "@/features/profile/socialCanvasLayout";
-import type { AccountProfile, ProfileCanvasResponse, RelatedUser } from "@/api/types";
+import { accountSettingsUrl } from "@/features/profile/lib/accountLinks";
+import { buildCollectionCanvasLayout } from "@/features/profile/lib/collectionCanvasLayout";
+import { buildProfileCanvasLayout, ORBIT_OFFSETS } from "@/features/profile/lib/profileCanvasLayout";
+import { buildSocialCanvasLayout, socialNodesOverlap } from "@/features/profile/lib/socialCanvasLayout";
+import type { AccountProfile, ProfileCanvasResponse, RelatedUser } from "@/shared/api/types";
 
 function response(nodes: ProfileCanvasResponse["nodes"], owner = false): ProfileCanvasResponse {
   return {

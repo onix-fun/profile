@@ -2,21 +2,21 @@ import { mount } from "@vue/test-utils";
 import { createMemoryHistory, createRouter } from "vue-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { router as appRouter } from "@/app/router";
-import { contentUrl } from "@/api/navigation";
-import { ProfileService } from "@/api/profileService";
-import { ContentService } from "@/api/contentService";
-import AppShell from "@/features/shell/AppShell.vue";
-import App from "@/App.vue";
-import { filterProfileNavigation } from "@/features/embed/profileEmbed";
-import type { ProfileNavButton } from "@/api/types";
+import { contentUrl } from "@/shared/api/navigation";
+import { ProfileService } from "@/shared/api/profileService";
+import { ContentService } from "@/shared/api/contentService";
+import AppShell from "@/features/shell/ui/AppShell.vue";
+import App from "@/app/App.vue";
+import { filterProfileNavigation } from "@/features/embed/lib/profileEmbed";
+import type { ProfileNavButton } from "@/shared/api/types";
 
-vi.mock("@/api/profileService", () => ({
+vi.mock("@/shared/api/profileService", () => ({
   ProfileService: {
     session: vi.fn().mockResolvedValue({ id: "viewer", username: "viewer" }),
   },
 }));
 
-vi.mock("@/api/contentService", () => ({
+vi.mock("@/shared/api/contentService", () => ({
   ContentService: {
     currentActor: vi.fn().mockResolvedValue({
       user: { id: "viewer", username: "viewer" },

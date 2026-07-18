@@ -1,9 +1,9 @@
 import { createRouter, createWebHistory } from "vue-router";
-import { runtimeConfig } from "@/runtime-config";
-import { redirectToAccount } from "@/api/authRedirect";
-import { ProfileService } from "@/api/profileService";
-import { contentUrl, isContentPath } from "@/api/navigation";
-import { isEmbeddedProfile, postEmbedNavigation } from "@/features/embed/profileEmbed";
+import { runtimeConfig } from "@/shared/config/runtime";
+import { redirectToAccount } from "@/shared/api/authRedirect";
+import { ProfileService } from "@/shared/api/profileService";
+import { contentUrl, isContentPath } from "@/shared/api/navigation";
+import { isEmbeddedProfile, postEmbedNavigation } from "@/features/embed/lib/profileEmbed";
 
 let sessionCheck: Promise<unknown> | null = null;
 const ExternalRedirect = { template: "<span />" };
@@ -22,19 +22,19 @@ export const router = createRouter({
     {
       path: "/",
       name: "ProfileHome",
-      component: () => import("@/features/profile/ProfileHomeRedirect.vue"),
+      component: () => import("@/pages/redirect/ProfileHomeRedirect.vue"),
       meta: { requiresAuth: true },
     },
     {
       path: "/me",
       name: "ProfileMe",
-      component: () => import("@/features/profile/ProfileHomeRedirect.vue"),
+      component: () => import("@/pages/redirect/ProfileHomeRedirect.vue"),
       meta: { requiresAuth: true },
     },
     {
       path: "/search",
       name: "Search",
-      component: () => import("@/features/content/SearchPage.vue"),
+      component: () => import("@/pages/search/SearchPage.vue"),
     },
     {
       path: "/p/:postId",
@@ -63,34 +63,34 @@ export const router = createRouter({
     {
       path: "/u/:nickname/social",
       name: "SocialCanvas",
-      component: () => import("@/features/profile/SocialCanvasPage.vue"),
+      component: () => import("@/pages/social/SocialCanvasPage.vue"),
       meta: { requiresAuth: true },
     },
     {
       path: "/o/:orgname/social",
       name: "OrganizationSocialCanvas",
-      component: () => import("@/features/profile/SocialCanvasPage.vue"),
+      component: () => import("@/pages/social/SocialCanvasPage.vue"),
       meta: { requiresAuth: true },
     },
     {
       path: "/u/:nickname/collections/:collectionId",
       name: "CollectionCanvas",
-      component: () => import("@/features/profile/CollectionCanvasPage.vue"),
+      component: () => import("@/pages/collection/CollectionCanvasPage.vue"),
     },
     {
       path: "/o/:orgname/collections/:collectionId",
       name: "OrganizationCollectionCanvas",
-      component: () => import("@/features/profile/CollectionCanvasPage.vue"),
+      component: () => import("@/pages/collection/CollectionCanvasPage.vue"),
     },
     {
       path: "/u/:nickname",
       name: "Profile",
-      component: () => import("@/features/profile/ProfilePage.vue"),
+      component: () => import("@/pages/profile/ProfilePage.vue"),
     },
     {
       path: "/o/:orgname",
       name: "OrganizationProfile",
-      component: () => import("@/features/profile/ProfilePage.vue"),
+      component: () => import("@/pages/profile/ProfilePage.vue"),
     },
     {
       path: "/:pathMatch(.*)*",

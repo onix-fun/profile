@@ -1,0 +1,111 @@
+syntax = "proto3";
+
+package onix.profile;
+
+option java_multiple_files = true;
+option java_package = "com.onix.profile.contract";
+
+service ProfileService {
+  rpc GetPublicProfile(GetPublicProfileRequest) returns (PublicProfile);
+  rpc UpdatePublicProfile(UpdatePublicProfileRequest) returns (PublicProfile);
+  rpc SetAvatar(SetAvatarRequest) returns (PublicProfile);
+  rpc ListCollections(ListCollectionsRequest) returns (ListCollectionsResponse);
+  rpc GetCollection(GetCollectionRequest) returns (CollectionDetail);
+  rpc CreateCollection(CreateCollectionRequest) returns (Collection);
+  rpc UpdateCollection(UpdateCollectionRequest) returns (Collection);
+  rpc DeleteCollection(DeleteCollectionRequest) returns (DeleteCollectionResponse);
+  rpc GetItemCollections(GetItemCollectionsRequest) returns (ItemCollectionsResponse);
+  rpc SetItemCollections(SetItemCollectionsRequest) returns (ItemCollectionsResponse);
+}
+
+enum OwnerType {
+  OWNER_TYPE_UNSPECIFIED = 0;
+  OWNER_TYPE_USER = 1;
+  OWNER_TYPE_ORGANIZATION = 2;
+}
+
+message OwnerRef {
+  OwnerType type = 1;
+  string id = 2;
+}
+
+message SocialLink {
+  string platform = 1;
+  string url = 2;
+}
+
+message PublicProfile {
+  OwnerRef owner = 1;
+  string username = 2;
+  string display_name = 3;
+  string bio = 4;
+  string avatar_asset_id = 5;
+  repeated SocialLink social_links = 6;
+  int64 revision = 7;
+  string updated_at = 8;
+}
+
+message GetPublicProfileRequest {
+  OwnerRef owner = 1;
+}
+
+message UpdatePublicProfileRequest {
+  OwnerRef owner = 1;
+  string display_name = 2;
+  string bio = 3;
+  repeated SocialLink social_links = 4;
+  int64 expected_revision = 5;
+  string username = 6;
+}
+
+message SetAvatarRequest {
+  OwnerRef owner = 1;
+  string media_asset_id = 2;
+  int64 expected_revision = 3;
+}
+
+message Collection {
+  string id = 1;
+  OwnerRef owner = 2;
+  string title = 3;
+  string description = 4;
+  string cover_json = 5;
+  string visibility = 6;
+  int32 item_count = 7;
+  string created_at = 8;
+  string updated_at = 9;
+}
+
+message CollectionItemRef {
+  string provider_key = 1;
+  string item_type = 2;
+  string item_id = 3;
+}
+
+message ListCollectionsRequest { OwnerRef owner = 1; OwnerRef viewer = 2; int32 limit = 3; }
+message ListCollectionsResponse { repeated Collection collections = 1; }
+message GetCollectionRequest { string collection_id = 1; OwnerRef viewer = 2; int32 limit = 3; }
+message CollectionDetail { Collection collection = 1; repeated CollectionItemRef items = 2; }
+
+message CreateCollectionRequest {
+  OwnerRef owner = 1;
+  string title = 2;
+  string description = 3;
+  string cover_json = 4;
+  string visibility = 5;
+}
+
+message UpdateCollectionRequest {
+  OwnerRef owner = 1;
+  string collection_id = 2;
+  optional string title = 3;
+  optional string description = 4;
+  optional string cover_json = 5;
+  optional string visibility = 6;
+}
+
+message DeleteCollectionRequest { OwnerRef owner = 1; string collection_id = 2; }
+message DeleteCollectionResponse { bool deleted = 1; }
+message GetItemCollectionsRequest { OwnerRef owner = 1; CollectionItemRef item = 2; }
+message SetItemCollectionsRequest { OwnerRef owner = 1; CollectionItemRef item = 2; repeated string collection_ids = 3; }
+message ItemCollectionsResponse { CollectionItemRef item = 1; repeated string collection_ids = 2; }

@@ -10,8 +10,8 @@ import "primeicons/primeicons.css";
 import "@fontsource/roboto/400.css";
 import "@fontsource/roboto/500.css";
 import "@fontsource/roboto/700.css";
-import "./style.css";
-import App from "./App.vue";
+import "@/app/styles.css";
+import App from "@/app/App.vue";
 import { router } from "@/app/router";
 
 const AccountTheme = definePreset(Aura, {
