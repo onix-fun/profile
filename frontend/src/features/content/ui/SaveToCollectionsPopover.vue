@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ContentService } from "@/shared/api/contentService";
 import type { CollectionItemRef, SavedCollection } from "@/shared/api/types";
+import { activateFocusTrap } from "@/shared/lib/focusTrap";
+import OnixIcon from "@/shared/ui/OnixIcon.vue";
 
 const props = defineProps<{
   postId?: string;
@@ -18,6 +20,8 @@ const selected = ref<Set<string>>(new Set());
 const isLoading = ref(true);
 const isSaving = ref(false);
 const errorMessage = ref("");
+const dialog = ref<HTMLElement | null>(null);
+let deactivateFocusTrap: (() => void) | null = null;
 
 const refForItem = computed<CollectionItemRef>(() => props.itemRef || {
   serviceKey: "content",
@@ -25,7 +29,12 @@ const refForItem = computed<CollectionItemRef>(() => props.itemRef || {
   itemId: props.postId || "",
 });
 
-onMounted(loadState);
+onMounted(async () => {
+  void loadState();
+  await nextTick();
+  if (dialog.value) deactivateFocusTrap = activateFocusTrap(dialog.value, () => emit("close"));
+});
+onBeforeUnmount(() => deactivateFocusTrap?.());
 watch(refForItem, loadState);
 
 async function loadState() {
@@ -70,16 +79,16 @@ async function save() {
 
 <template>
   <div class="collection-popover-backdrop" @click.self="emit('close')">
-    <section class="collection-popover" role="dialog" aria-label="Save to collections">
+    <section ref="dialog" class="collection-popover" role="dialog" aria-modal="true" aria-label="Save to collections" tabindex="-1">
       <header>
         <strong>Save</strong>
         <button type="button" aria-label="Close" @click="emit('close')">
-          <i class="pi pi-times"></i>
+          <OnixIcon name="close" :size="18" />
         </button>
       </header>
 
       <div v-if="isLoading" class="collection-popover__state">
-        <i class="pi pi-spinner pi-spin"></i>
+        <OnixIcon name="refresh" class="onix-icon--spin" :size="20" />
         <span>Loading</span>
       </div>
 
@@ -93,12 +102,12 @@ async function save() {
             :class="{ 'is-selected': selected.has(collection.id) }"
             @click="toggle(collection.id)"
           >
-            <i :class="selected.has(collection.id) ? 'pi pi-check-square' : 'pi pi-stop'"></i>
+            <OnixIcon :name="selected.has(collection.id) ? 'check-square' : 'square'" :size="18" />
             <span>
               <strong>{{ collection.title }}</strong>
               <small>{{ collection.itemCount }} posts</small>
             </span>
-            <i :class="collection.visibility === 'PUBLIC' ? 'pi pi-globe' : 'pi pi-lock'"></i>
+            <OnixIcon :name="collection.visibility === 'PUBLIC' ? 'globe' : 'lock'" :size="18" />
           </button>
           <p v-if="!collections.length" class="collection-empty">No collections yet</p>
         </div>
@@ -108,7 +117,7 @@ async function save() {
       <p v-if="errorMessage" class="collection-error">{{ errorMessage }}</p>
       <footer>
         <button type="button" class="collection-save" :disabled="isSaving || isLoading" @click="save">
-          <i class="pi pi-bookmark"></i>
+          <OnixIcon name="bookmark" :size="18" />
           <span>{{ isSaving ? "Saving" : "Done" }}</span>
         </button>
       </footer>
@@ -124,7 +133,7 @@ async function save() {
   display: grid;
   place-items: center;
   padding: 18px;
-  background: rgba(15, 23, 42, 0.18);
+  background: var(--onix-color-overlay);
   backdrop-filter: blur(6px);
 }
 
@@ -134,12 +143,12 @@ async function save() {
   display: grid;
   gap: 12px;
   overflow: hidden;
-  border: 1px solid var(--surface-active, rgba(15, 23, 42, 0.1));
+  
   border-radius: 12px;
   padding: 14px;
-  background: var(--surface-raised, #ffffff);
-  color: var(--text, #111827);
-  box-shadow: 0 28px 90px rgba(15, 23, 42, 0.24);
+  background: var(--onix-color-surface-floating, var(--onix-color-surface-base));
+  color: var(--onix-color-text);
+  
 }
 
 .collection-popover header,
@@ -162,14 +171,14 @@ async function save() {
 }
 
 .collection-popover header button {
-  width: 34px;
-  height: 34px;
-  border: 0;
-  border-radius: 999px;
+  width: var(--onix-control-md);
+  height: var(--onix-control-md);
+  
+  border-radius: var(--onix-radius-pill);
   display: grid;
   place-items: center;
-  background: var(--surface-muted, #eef2f7);
-  color: var(--muted, #64748b);
+  background: var(--onix-color-surface-muted);
+  color: var(--onix-color-text-muted);
   cursor: pointer;
 }
 
@@ -183,7 +192,7 @@ async function save() {
 .collection-row {
   min-width: 0;
   min-height: 52px;
-  border: 1px solid var(--surface-active, #e2e8f0);
+  
   border-radius: 10px;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -197,8 +206,8 @@ async function save() {
 }
 
 .collection-row.is-selected {
-  border-color: #0f766e;
-  background: rgba(20, 184, 166, 0.1);
+  
+  background: var(--onix-color-tone-success-soft);
 }
 
 .collection-row span {
@@ -217,7 +226,7 @@ async function save() {
 .collection-row small,
 .collection-empty,
 .collection-error {
-  color: var(--muted, #64748b);
+  color: var(--onix-color-text-muted);
   font-size: 12px;
   font-weight: 800;
 }
@@ -229,15 +238,15 @@ async function save() {
 
 .collection-save {
   width: 100%;
-  min-height: 42px;
-  border: 0;
-  border-radius: 999px;
+  min-height: var(--onix-control-md);
+  
+  border-radius: var(--onix-radius-pill);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  background: var(--btn-primary-bg, #111827);
-  color: var(--btn-primary-text, #ffffff);
+  background: var(--onix-tone-solid, var(--onix-color-text));
+  color: var(--onix-tone-on-solid, var(--onix-color-surface-base));
   font-weight: 900;
   cursor: pointer;
 }
@@ -247,7 +256,7 @@ async function save() {
   display: grid;
   place-items: center;
   gap: 6px;
-  color: var(--muted, #64748b);
+  color: var(--onix-color-text-muted);
   font-weight: 900;
 }
 </style>

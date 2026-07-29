@@ -1,0 +1,57 @@
+import { icons, type IconName } from "@onix/design-system";
+
+const legacyIcons: Record<string, IconName> = {
+  "arrow-left": "arrow-left",
+  "arrow-right": "arrow-right",
+  "angle-left": "arrow-left",
+  "angle-right": "arrow-right",
+  ban: "lock",
+  bars: "menu",
+  bookmark: "bookmark",
+  building: "building",
+  calendar: "calendar",
+  check: "check",
+  "check-square": "check-square",
+  clock: "clock",
+  comments: "message",
+  database: "file",
+  "exclamation-circle": "warning",
+  "exclamation-triangle": "warning",
+  file: "file",
+  folder: "bookmark",
+  globe: "globe",
+  hashtag: "filter",
+  heart: "heart",
+  "heart-fill": "heart-filled",
+  history: "clock",
+  home: "home",
+  "info-circle": "info",
+  image: "image",
+  link: "link",
+  lock: "lock",
+  plus: "add",
+  "plus-circle": "add",
+  search: "search",
+  send: "send",
+  "sliders-h": "filter",
+  sparkles: "star",
+  spinner: "refresh",
+  star: "star",
+  "star-fill": "star-filled",
+  stop: "square",
+  stopwatch: "film",
+  "th-large": "grid",
+  times: "close",
+  trash: "trash",
+  user: "user",
+  "user-plus": "users",
+  users: "users",
+  video: "video",
+  "volume-up": "audio",
+};
+
+export function onixIconName(value: string | undefined, fallback: IconName = "file"): IconName {
+  if (!value) return fallback;
+  const key = value.split(/\s+/).reverse().find((part: string) => part.startsWith("pi-"))?.slice(3) || value;
+  return legacyIcons[key] || (icons.includes(key as IconName) ? (key as IconName) : fallback);
+}

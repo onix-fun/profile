@@ -4,6 +4,11 @@ import vue from "@vitejs/plugin-vue";
 
 export default defineConfig({
   plugins: [vue()],
+  server: {
+    fs: {
+      allow: [fileURLToPath(new URL("../..", import.meta.url))],
+    },
+  },
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
@@ -12,5 +17,6 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     globals: true,
+    exclude: ["e2e/**", "node_modules/**", "dist/**"],
   },
 });

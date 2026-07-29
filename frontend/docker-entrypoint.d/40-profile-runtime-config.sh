@@ -12,6 +12,7 @@ api_base_url=$(js_escape "${PROFILE_API_BASE_URL:-/api}")
 frontend_base_path=$(js_escape "${PROFILE_FRONTEND_BASE_PATH:-/}")
 account_frontend_url=$(js_escape "${PROFILE_ACCOUNT_FRONTEND_URL:-http://account.onix.localhost:8088}")
 content_frontend_url=$(js_escape "${PROFILE_CONTENT_FRONTEND_URL:-http://content.onix.localhost:8088}")
+preference_cookie_domain=$(js_escape "${PROFILE_PREFERENCE_COOKIE_DOMAIN:-onix.localhost}")
 frame_ancestors="${PROFILE_FRAME_ANCESTORS:-'self' ${PROFILE_CONTENT_FRONTEND_URL:-http://content.onix.localhost:8088}}"
 
 cat > "$config_file" <<EOF
@@ -19,7 +20,9 @@ window.__PROFILE_CONFIG__ = {
   apiBaseUrl: "$api_base_url",
   frontendBasePath: "$frontend_base_path",
   accountFrontendUrl: "$account_frontend_url",
-  contentFrontendUrl: "$content_frontend_url"
+  contentFrontendUrl: "$content_frontend_url",
+  preferenceCookieDomain: "$preference_cookie_domain",
+  embeddedParentOrigins: ["$account_frontend_url", "$content_frontend_url"]
 };
 EOF
 

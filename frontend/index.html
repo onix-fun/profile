@@ -1,10 +1,18 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="onix-root">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Onix Profile</title>
     <script src="/profile-runtime-config.js"></script>
+    <script>
+      (function(){
+        var m=document.cookie.match(/(?:^|;\s*)onix_theme=([^;]*)/);
+        var t=m?decodeURIComponent(m[1]):"system";
+        if(t!=="light"&&t!=="dark")t=matchMedia("(prefers-color-scheme:dark)").matches?"dark":"light";
+        document.documentElement.dataset.onixTheme=t;
+      })();
+    </script>
   </head>
   <body>
     <div id="app"></div>

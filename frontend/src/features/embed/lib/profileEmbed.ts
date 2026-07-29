@@ -1,5 +1,8 @@
 import type { RouteLocationNormalizedLoaded } from "vue-router";
 import type { ProfileNavButton } from "@/shared/api/types";
+import { createPreferenceMessage } from "@onix/design-system";
+import { runtimeConfig } from "@/shared/config/runtime";
+import { applyPreferenceMessage, getPreferences } from "@/shared/lib/preferences";
 
 export interface OnixNavigateMessage {
   type: "onix:navigate";
@@ -11,6 +14,19 @@ export interface OnixNavigateMessage {
 export interface OnixProfileRouteMessage {
   type: "onix:profile-route";
   path: string;
+}
+
+export function trustedParentOrigin(route: Pick<RouteLocationNormalizedLoaded, "query">): string | null {
+  const candidate = firstQuery(route.query.parentOrigin);
+  if (!candidate) return null;
+  try {
+    const origin = new URL(candidate).origin;
+    if (!runtimeConfig.embeddedParentOrigins.includes(origin)) return null;
+    if (document.referrer && new URL(document.referrer).origin !== origin) return null;
+    return origin;
+  } catch {
+    return null;
+  }
 }
 
 type QueryValue = string | null | Array<string | null> | undefined;
@@ -41,7 +57,7 @@ export function embedQuery(route: Pick<RouteLocationNormalizedLoaded, "query">):
   if (!isEmbeddedProfile(route)) return {};
   const query: Record<string, string> = { embed: "1" };
   const from = serviceFilterParam(route);
-  const parentOrigin = firstQuery(route.query.parentOrigin);
+  const parentOrigin = trustedParentOrigin(route);
   if (from) query.from = from;
   if (parentOrigin) query.parentOrigin = parentOrigin;
   return query;
@@ -64,7 +80,7 @@ export function filterProfileNavigation(buttons: ProfileNavButton[], route: Pick
 
 export function postEmbedNavigation(route: Pick<RouteLocationNormalizedLoaded, "query">, message: Omit<OnixNavigateMessage, "type">): boolean {
   if (!isEmbeddedProfile(route) || window.parent === window) return false;
-  const parentOrigin = firstQuery(route.query.parentOrigin);
+  const parentOrigin = trustedParentOrigin(route);
   if (!parentOrigin) return false;
   window.parent.postMessage({ type: "onix:navigate", ...message } satisfies OnixNavigateMessage, parentOrigin);
   return true;
@@ -72,11 +88,24 @@ export function postEmbedNavigation(route: Pick<RouteLocationNormalizedLoaded, "
 
 export function postProfileRoute(route: Pick<RouteLocationNormalizedLoaded, "query" | "fullPath">): void {
   if (!isEmbeddedProfile(route) || window.parent === window) return;
-  const parentOrigin = firstQuery(route.query.parentOrigin);
+  const parentOrigin = trustedParentOrigin(route);
   if (!parentOrigin) return;
   const url = new URL(route.fullPath, window.location.origin);
   url.searchParams.delete("embed");
   url.searchParams.delete("parentOrigin");
   const path = `${url.pathname}${url.search}${url.hash}`;
   window.parent.postMessage({ type: "onix:profile-route", path } satisfies OnixProfileRouteMessage, parentOrigin);
+}
+
+export function postEmbedPreferences(route: Pick<RouteLocationNormalizedLoaded, "query">): void {
+  if (!isEmbeddedProfile(route) || window.parent === window) return;
+  const parentOrigin = trustedParentOrigin(route);
+  if (!parentOrigin) return;
+  window.parent.postMessage(createPreferenceMessage(getPreferences()), parentOrigin);
+}
+
+export function installEmbedPreferenceReceiver(route: Pick<RouteLocationNormalizedLoaded, "query">): () => void {
+  const listener = (event: MessageEvent) => { applyPreferenceMessage(event, trustedParentOrigin(route)); };
+  window.addEventListener("message", listener);
+  return () => window.removeEventListener("message", listener);
 }

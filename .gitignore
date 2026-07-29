@@ -10,3 +10,5 @@ frontend/*.tsbuildinfo
 .contracts/
 .env
 *.log
+frontend/test-results/
+frontend/playwright-report/

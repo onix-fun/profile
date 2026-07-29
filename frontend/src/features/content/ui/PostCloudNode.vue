@@ -4,6 +4,7 @@ import { ContentService } from "@/shared/api/contentService";
 import type { ContentBlock, ProfileContentPost } from "@/shared/api/types";
 import { postSnippet, stripMediaReferences } from "@/features/display/lib/displayText";
 import { renderInlineMarkdown } from "@/features/display/lib/markdown";
+import OnixIcon from "@/shared/ui/OnixIcon.vue";
 
 const props = withDefaults(defineProps<{
   post: ProfileContentPost;
@@ -60,18 +61,18 @@ const authorAvatar = computed(() => props.post.author?.avatarUrl || "");
       <span v-if="mediaBlock" class="post-cloud__media">
         <img v-if="mediaType === 'IMAGE' && source" :src="source" alt="" />
         <video v-else-if="mediaType === 'VIDEO' && source" :src="source" muted playsinline autoplay loop preload="metadata" />
-        <i v-else :class="mediaType === 'VIDEO' ? 'pi pi-video' : 'pi pi-image'"></i>
+        <OnixIcon v-else :name="mediaType === 'VIDEO' ? 'video' : 'image'" :size="22" />
       </span>
 
       <span v-else-if="fileBlock" class="post-cloud__file">
-        <i :class="fileBlock.type === 'AUDIO' ? 'pi pi-volume-up' : 'pi pi-file'"></i>
+        <OnixIcon :name="fileBlock.type === 'AUDIO' ? 'audio' : 'file'" :size="20" />
         <span>{{ fileName }}</span>
       </span>
 
       <span v-else class="post-cloud__text">
         <span v-if="mode !== 'profile'" class="post-cloud__author">
           <img v-if="authorAvatar" :src="authorAvatar" alt="" />
-          <i v-else class="pi pi-user"></i>
+          <OnixIcon v-else name="user" :size="18" />
           <small>@{{ authorName }}</small>
         </span>
         <strong>{{ title }}</strong>
@@ -81,14 +82,14 @@ const authorAvatar = computed(() => props.post.author?.avatarUrl || "");
 
     <span v-if="mode !== 'full'" class="post-cloud__actions" :class="{ disabled: disabledActions }">
       <button type="button" title="Like" :disabled="disabledActions" @click.stop="emit('like')">
-        <i :class="post.likedByViewer ? 'pi pi-heart-fill' : 'pi pi-heart'"></i>
+        <OnixIcon :name="post.likedByViewer ? 'heart-filled' : 'heart'" :size="18" />
         <span>{{ post.likeCount || 0 }}</span>
       </button>
       <button type="button" title="Comments" :disabled="disabledActions" @click.stop="emit('comments')">
-        <i class="pi pi-comments"></i>
+        <OnixIcon name="message" :size="18" />
       </button>
       <button type="button" title="Bookmark" :disabled="disabledActions" @click.stop="emit('bookmark')">
-        <i class="pi pi-bookmark"></i>
+        <OnixIcon name="bookmark" :size="18" />
       </button>
     </span>
 
@@ -105,12 +106,12 @@ const authorAvatar = computed(() => props.post.author?.avatarUrl || "");
   position: relative;
   height: 100%;
   min-width: 0;
-  color: #111827;
+  color: var(--onix-color-text);
 }
 
 .post-cloud__body,
 .post-cloud__actions button {
-  border: 0;
+  
   font: inherit;
   cursor: pointer;
 }
@@ -131,8 +132,8 @@ const authorAvatar = computed(() => props.post.author?.avatarUrl || "");
 .post-cloud__file {
   min-width: 0;
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 22px 52px rgba(15, 23, 42, 0.16);
+  background: var(--onix-color-surface-floating);
+  
   transition: transform 150ms ease, box-shadow 150ms ease;
 }
 
@@ -140,7 +141,7 @@ const authorAvatar = computed(() => props.post.author?.avatarUrl || "");
 .post-cloud:hover .post-cloud__text,
 .post-cloud:hover .post-cloud__file {
   transform: translateY(-3px);
-  box-shadow: 0 30px 72px rgba(15, 23, 42, 0.2);
+  
 }
 
 .post-cloud__media {
@@ -150,8 +151,8 @@ const authorAvatar = computed(() => props.post.author?.avatarUrl || "");
   border-radius: 50%;
   display: grid;
   place-items: center;
-  background: #111827;
-  color: #ffffff;
+  background: var(--onix-color-text);
+  color: var(--onix-tone-on-solid);
 }
 
 .post-cloud--video .post-cloud__media {
@@ -185,8 +186,8 @@ const authorAvatar = computed(() => props.post.author?.avatarUrl || "");
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: #64748b;
-  font-size: 11px;
+  color: var(--onix-color-text-muted);
+  font-size: var(--onix-font-size-caption);
   font-weight: 900;
 }
 
@@ -194,12 +195,12 @@ const authorAvatar = computed(() => props.post.author?.avatarUrl || "");
 .post-cloud__author i {
   width: 18px;
   height: 18px;
-  border-radius: 999px;
+  border-radius: var(--onix-radius-pill);
   display: grid;
   place-items: center;
   object-fit: cover;
-  background: #e2e8f0;
-  font-size: 9px;
+  background: var(--onix-color-surface-active);
+  font-size: var(--onix-font-size-caption);
 }
 
 .post-cloud__author small {
@@ -210,7 +211,7 @@ const authorAvatar = computed(() => props.post.author?.avatarUrl || "");
 
 .post-cloud__text strong {
   overflow: hidden;
-  color: #111827;
+  color: var(--onix-color-text);
   font-size: 18px;
   line-height: 1.12;
   text-overflow: ellipsis;
@@ -220,7 +221,7 @@ const authorAvatar = computed(() => props.post.author?.avatarUrl || "");
 .post-cloud__text span {
   display: -webkit-box;
   overflow: hidden;
-  color: #475569;
+  color: var(--onix-color-text-muted);
   font-size: 14px;
   font-weight: 650;
   line-height: 1.38;
@@ -229,21 +230,21 @@ const authorAvatar = computed(() => props.post.author?.avatarUrl || "");
 }
 
 .post-cloud__text :deep(a) {
-  color: #0f766e;
+  color: var(--onix-color-tone-success-ink);
   font-weight: 900;
 }
 
 .post-cloud__text :deep(.tag-inline) {
-  color: #047857;
+  color: var(--onix-color-tone-success-ink);
   font-weight: 900;
 }
 
 .post-cloud__text :deep(.file-link-inline) {
   display: inline-flex;
-  border-radius: 999px;
+  border-radius: var(--onix-radius-pill);
   padding: 2px 8px;
-  background: #dbeafe;
-  color: #1d4ed8;
+  background: var(--onix-color-tone-info-soft);
+  color: var(--onix-color-tone-info-ink);
   font-weight: 900;
 }
 
@@ -253,9 +254,9 @@ const authorAvatar = computed(() => props.post.author?.avatarUrl || "");
   align-items: center;
   gap: 12px;
   padding: 18px 24px;
-  border-radius: 999px;
-  background: #e0f2fe;
-  color: #075985;
+  border-radius: var(--onix-radius-pill);
+  background: var(--onix-color-tone-info-soft);
+  color: var(--onix-color-tone-info-ink);
   font-weight: 900;
 }
 
@@ -273,30 +274,30 @@ const authorAvatar = computed(() => props.post.author?.avatarUrl || "");
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  border-radius: 999px;
+  border-radius: var(--onix-radius-pill);
   padding: 6px;
-  background: #2f303a;
-  box-shadow: 0 12px 26px rgba(15, 23, 42, 0.28);
+  background: var(--onix-color-text);
+  
 }
 
 .post-cloud__actions button {
-  min-width: 34px;
-  height: 30px;
+  min-width: var(--onix-control-md);
+  height: var(--onix-control-md);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 4px;
-  border-radius: 999px;
+  border-radius: var(--onix-radius-pill);
   background: transparent;
-  color: #d1d5db;
+  color: var(--onix-color-surface-active);
   font-size: 12px;
   font-weight: 900;
 }
 
 .post-cloud__actions button:hover:not(:disabled),
 .post-cloud__actions button:focus-visible {
-  background: rgba(255, 255, 255, 0.11);
-  color: #ffffff;
+  background: var(--onix-color-surface-floating);
+  color: var(--onix-tone-on-solid);
 }
 
 .post-cloud__actions button:disabled {
@@ -311,8 +312,8 @@ const authorAvatar = computed(() => props.post.author?.avatarUrl || "");
   display: flex;
   max-width: calc(100% - 24px);
   gap: 6px;
-  color: #64748b;
-  font-size: 11px;
+  color: var(--onix-color-text-muted);
+  font-size: var(--onix-font-size-caption);
   font-weight: 900;
 }
 
@@ -359,7 +360,7 @@ const authorAvatar = computed(() => props.post.author?.avatarUrl || "");
 
 .post-cloud--profile .post-cloud__text strong {
   display: -webkit-box;
-  color: #111827;
+  color: var(--onix-color-text);
   font-size: 13px;
   line-height: 1.18;
   white-space: normal;

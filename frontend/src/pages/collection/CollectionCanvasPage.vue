@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
-import { useToast } from "primevue/usetoast";
+import { useOnixToast } from "@/shared/ui/toast";
 import { ContentService } from "@/shared/api/contentService";
 import { contentUrl } from "@/shared/api/navigation";
 import type { CollectionDetail, ContentBlock, ProfileContentPost } from "@/shared/api/types";
@@ -13,10 +13,11 @@ import {
   type CollectionCanvasSize,
   type CollectionPostNode,
 } from "@/features/profile/lib/collectionCanvasLayout";
+import OnixIcon from "@/shared/ui/OnixIcon.vue";
 
 const route = useRoute();
 const router = useRouter();
-const toast = useToast();
+const toast = useOnixToast();
 
 const detail = ref<CollectionDetail | null>(null);
 const isLoading = ref(true);
@@ -122,12 +123,12 @@ function previewSource(block: ContentBlock): string {
 <template>
   <main class="collection-canvas-shell">
     <RouterLink class="collection-back" :to="ownerPath" aria-label="Back to profile">
-      <i class="pi pi-arrow-left"></i>
+      <OnixIcon name="arrow-left" :size="20" />
     </RouterLink>
 
     <section v-if="isLoading" class="collection-state">Loading collection</section>
     <section v-else-if="errorMessage" class="collection-state collection-state-panel">
-      <i class="pi pi-lock"></i>
+      <OnixIcon name="lock" :size="28" />
       <strong>Collection unavailable</strong>
       <span>{{ errorMessage }}</span>
     </section>
@@ -144,7 +145,7 @@ function previewSource(block: ContentBlock): string {
                 alt=""
               />
             </template>
-            <i v-else class="pi pi-bookmark"></i>
+            <OnixIcon v-else name="bookmark" :size="28" />
           </span>
           <strong>{{ detail.collection.title }}</strong>
           <p>{{ detail.collection.description || `${detail.collection.itemCount} saved posts` }}</p>
@@ -176,7 +177,7 @@ function previewSource(block: ContentBlock): string {
 <style scoped>
 .collection-canvas-shell {
   min-height: 100dvh;
-  background: var(--bg);
+  background: var(--onix-color-surface-page);
 }
 
 .collection-back {
@@ -184,16 +185,16 @@ function previewSource(block: ContentBlock): string {
   z-index: 9;
   top: max(14px, env(safe-area-inset-top));
   left: 16px;
-  width: 42px;
-  height: 42px;
-  border: 1px solid var(--surface-active);
-  border-radius: 999px;
+  width: var(--onix-control-md);
+  height: var(--onix-control-md);
+  
+  border-radius: var(--onix-radius-pill);
   display: grid;
   place-items: center;
-  background: var(--surface-raised);
-  color: var(--text);
+  background: var(--onix-color-surface-floating);
+  color: var(--onix-color-text);
   text-decoration: none;
-  box-shadow: 0 12px 34px rgba(15, 23, 42, 0.12);
+  
 }
 
 .collection-viewport {
@@ -208,10 +209,7 @@ function previewSource(block: ContentBlock): string {
   position: relative;
   min-width: 100%;
   min-height: 100%;
-  background-image:
-    radial-gradient(circle, rgba(71, 85, 105, 0.14) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(148, 163, 184, 0.1) 1px, transparent 1px);
-  background-size: 24px 24px, 180px 180px;
+  background: var(--onix-color-surface-page);
 }
 
 .collection-center,
@@ -224,11 +222,11 @@ function previewSource(block: ContentBlock): string {
   grid-template-rows: 104px auto 1fr;
   gap: 8px;
   padding: 14px;
-  border: 1px solid var(--surface-active);
+  
   border-radius: 14px;
-  background: var(--surface-raised);
-  color: var(--text);
-  box-shadow: 0 24px 72px rgba(15, 23, 42, 0.16);
+  background: var(--onix-color-surface-floating);
+  color: var(--onix-color-text);
+  
   overflow: hidden;
 }
 
@@ -239,7 +237,7 @@ function previewSource(block: ContentBlock): string {
   gap: 4px;
   overflow: hidden;
   border-radius: 12px;
-  background: linear-gradient(135deg, #111827, #0f766e);
+  background: var(--onix-color-surface-muted);
 }
 
 .collection-center__preview img {
@@ -255,7 +253,7 @@ function previewSource(block: ContentBlock): string {
 .collection-center__preview.is-empty {
   display: grid;
   place-items: center;
-  color: #ffffff;
+  color: var(--onix-tone-on-solid);
   font-size: 32px;
 }
 
@@ -275,7 +273,7 @@ function previewSource(block: ContentBlock): string {
 
 .collection-center p {
   display: -webkit-box;
-  color: var(--muted);
+  color: var(--onix-color-text-muted);
   font-size: 13px;
   font-weight: 750;
   line-height: 1.35;
@@ -287,7 +285,7 @@ function previewSource(block: ContentBlock): string {
   min-height: 100dvh;
   display: grid;
   place-items: center;
-  color: var(--muted);
+  color: var(--onix-color-text-muted);
   font-weight: 900;
 }
 

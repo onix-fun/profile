@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import OnixIcon from "@/shared/ui/OnixIcon.vue";
 import { onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ContentService } from "@/shared/api/contentService";
@@ -17,7 +18,7 @@ onMounted(async () => {
 
 <template>
   <main class="profile-home-redirect">
-    <i class="pi pi-spinner pi-spin"></i>
+    <OnixIcon name="refresh" class="onix-icon--spin" :size="24" />
   </main>
 </template>
 
@@ -26,6 +27,6 @@ onMounted(async () => {
   min-height: 100dvh;
   display: grid;
   place-items: center;
-  color: #64748b;
+  color: var(--onix-color-text-muted);
 }
 </style>

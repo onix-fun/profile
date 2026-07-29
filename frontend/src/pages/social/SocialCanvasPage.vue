@@ -10,6 +10,7 @@ import {
   type SocialCanvasSize,
   type SocialCanvasUserNode,
 } from "@/features/profile/lib/socialCanvasLayout";
+import OnixIcon from "@/shared/ui/OnixIcon.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -155,7 +156,7 @@ function profilePath(ownerType: "USER" | "ORGANIZATION", username: string): stri
 <template>
   <main class="social-shell">
     <section v-if="errorMessage" class="social-state">
-      <i class="pi pi-lock"></i>
+      <OnixIcon name="lock" :size="28" />
       <h1>Social unavailable</h1>
       <p>{{ errorMessage }}</p>
       <RouterLink :to="ownerProfilePath">Back to profile</RouterLink>
@@ -164,7 +165,7 @@ function profilePath(ownerType: "USER" | "ORGANIZATION", username: string): stri
     <section v-else class="social-canvas-shell">
       <div class="social-toolbar">
         <RouterLink class="social-back" :to="ownerProfilePath" aria-label="Back to profile">
-          <i class="pi pi-arrow-left"></i>
+          <OnixIcon name="arrow-left" :size="20" />
         </RouterLink>
         <div class="social-title">
           <strong>{{ ownerName }}</strong>
@@ -188,7 +189,7 @@ function profilePath(ownerType: "USER" | "ORGANIZATION", username: string): stri
           <RouterLink class="owner-node" :style="ownerStyle" :to="ownerProfilePath">
             <span class="owner-avatar">
               <img v-if="owner.avatarUrl" :src="owner.avatarUrl" alt="" />
-              <i v-else-if="owner.ownerType === 'ORGANIZATION'" class="pi pi-building"></i>
+              <OnixIcon v-else-if="owner.ownerType === 'ORGANIZATION'" name="building" :size="20" />
               <span v-else>{{ ownerName.slice(0, 2).toUpperCase() }}</span>
             </span>
             <strong>{{ ownerName }}</strong>
@@ -205,7 +206,7 @@ function profilePath(ownerType: "USER" | "ORGANIZATION", username: string): stri
           >
             <span class="user-avatar">
               <img v-if="node.user.avatarUrl" :src="node.user.avatarUrl" alt="" />
-              <i v-else-if="node.user.ownerType === 'ORGANIZATION'" class="pi pi-building"></i>
+              <OnixIcon v-else-if="node.user.ownerType === 'ORGANIZATION'" name="building" :size="20" />
               <span v-else>{{ displayName(node.user).slice(0, 2).toUpperCase() }}</span>
             </span>
             <span class="user-capsule">
@@ -215,7 +216,7 @@ function profilePath(ownerType: "USER" | "ORGANIZATION", username: string): stri
           </RouterLink>
 
           <p v-if="!isLoading && !users.length" class="social-empty">No users in this filter</p>
-          <p v-if="isLoading" class="social-empty"><i class="pi pi-spinner pi-spin"></i> Loading social</p>
+          <p v-if="isLoading" class="social-empty"><OnixIcon name="refresh" class="onix-icon--spin" :size="20" /> Loading social</p>
         </div>
       </div>
     </section>
@@ -226,7 +227,7 @@ function profilePath(ownerType: "USER" | "ORGANIZATION", username: string): stri
 .social-shell,
 .social-canvas-shell {
   min-height: 100dvh;
-  background: var(--bg);
+  background: var(--onix-color-surface-page);
 }
 
 .social-canvas-shell {
@@ -254,15 +255,15 @@ function profilePath(ownerType: "USER" | "ORGANIZATION", username: string): stri
 }
 
 .social-back {
-  width: 42px;
-  height: 42px;
-  border-radius: 999px;
+  width: var(--onix-control-md);
+  height: var(--onix-control-md);
+  border-radius: var(--onix-radius-pill);
   display: grid;
   place-items: center;
-  color: var(--text);
+  color: var(--onix-color-text);
   text-decoration: none;
-  background: var(--surface-raised);
-  border: 1px solid var(--surface-active);
+  background: var(--onix-color-surface-floating);
+  
 }
 
 .social-title {
@@ -280,12 +281,12 @@ function profilePath(ownerType: "USER" | "ORGANIZATION", username: string): stri
 
 .social-title strong {
   font-size: 16px;
-  color: var(--text);
+  color: var(--onix-color-text);
   font-weight: 900;
 }
 
 .social-title span {
-  color: var(--muted);
+  color: var(--onix-color-text-muted);
   font-size: 12px;
   font-weight: 800;
 }
@@ -294,19 +295,19 @@ function profilePath(ownerType: "USER" | "ORGANIZATION", username: string): stri
   display: inline-flex;
   gap: 4px;
   padding: 5px;
-  border-radius: 999px;
-  background: var(--surface-raised);
-  border: 1px solid var(--surface-active);
-  box-shadow: 0 10px 26px rgba(22, 34, 51, 0.08);
+  border-radius: var(--onix-radius-pill);
+  background: var(--onix-color-surface-floating);
+  
+  
 }
 
 .social-filters button {
-  min-height: 32px;
-  border: 0;
-  border-radius: 999px;
+  min-height: var(--onix-control-md);
+  
+  border-radius: var(--onix-radius-pill);
   padding: 0 12px;
   background: transparent;
-  color: var(--muted);
+  color: var(--onix-color-text-muted);
   font: inherit;
   font-size: 12px;
   font-weight: 900;
@@ -314,8 +315,8 @@ function profilePath(ownerType: "USER" | "ORGANIZATION", username: string): stri
 }
 
 .social-filters button.is-active {
-  background: var(--text);
-  color: var(--surface);
+  background: var(--onix-color-text);
+  color: var(--onix-color-surface-base);
 }
 
 .social-viewport {
@@ -339,7 +340,7 @@ function profilePath(ownerType: "USER" | "ORGANIZATION", username: string): stri
   position: absolute;
   box-sizing: border-box;
   text-decoration: none;
-  color: var(--text);
+  color: var(--onix-color-text);
 }
 
 .owner-node {
@@ -347,20 +348,20 @@ function profilePath(ownerType: "USER" | "ORGANIZATION", username: string): stri
   place-items: center;
   align-content: center;
   gap: 5px;
-  border-radius: 999px;
-  background: var(--surface-raised);
-  border: 1px solid var(--surface-active);
-  box-shadow: 0 16px 42px rgba(22, 34, 51, 0.14);
+  border-radius: var(--onix-radius-pill);
+  background: var(--onix-color-surface-floating);
+  
+  
 }
 
 .owner-avatar {
   width: 82px;
   height: 82px;
-  border-radius: 999px;
+  border-radius: var(--onix-radius-pill);
   display: grid;
   place-items: center;
   overflow: hidden;
-  background: var(--surface-muted);
+  background: var(--onix-color-surface-muted);
   font-size: 24px;
   font-weight: 900;
 }
@@ -374,7 +375,7 @@ function profilePath(ownerType: "USER" | "ORGANIZATION", username: string): stri
 
 .owner-avatar i,
 .user-avatar i {
-  color: var(--muted);
+  color: var(--onix-color-text-muted);
 }
 
 .owner-node strong {
@@ -387,7 +388,7 @@ function profilePath(ownerType: "USER" | "ORGANIZATION", username: string): stri
 }
 
 .owner-node small {
-  color: var(--muted);
+  color: var(--onix-color-text-muted);
   font-weight: 800;
 }
 
@@ -395,16 +396,16 @@ function profilePath(ownerType: "USER" | "ORGANIZATION", username: string): stri
   display: flex;
   align-items: center;
   gap: 0;
-  filter: drop-shadow(0 14px 28px rgba(22, 34, 51, 0.11));
+  filter: none;
 }
 
 .user-node--organization .user-avatar {
-  background: rgba(20, 184, 166, 0.12);
-  color: #0f766e;
+  background: var(--onix-color-tone-success-soft);
+  color: var(--onix-color-tone-success-ink);
 }
 
 .user-node--organization .user-capsule {
-  border-color: rgba(20, 184, 166, 0.22);
+  
 }
 
 .user-avatar {
@@ -412,12 +413,12 @@ function profilePath(ownerType: "USER" | "ORGANIZATION", username: string): stri
   z-index: 2;
   width: 66px;
   height: 66px;
-  border-radius: 999px;
+  border-radius: var(--onix-radius-pill);
   display: grid;
   place-items: center;
   overflow: hidden;
-  border: 4px solid var(--surface);
-  background: var(--surface-muted);
+  
+  background: var(--onix-color-surface-muted);
   font-size: 18px;
   font-weight: 900;
 }
@@ -432,9 +433,9 @@ function profilePath(ownerType: "USER" | "ORGANIZATION", username: string): stri
   gap: 2px;
   margin-left: -8px;
   padding: 7px 13px 7px 18px;
-  border-radius: 999px;
-  background: var(--surface-raised);
-  border: 1px solid var(--surface-active);
+  border-radius: var(--onix-radius-pill);
+  background: var(--onix-color-surface-floating);
+  
 }
 
 .user-capsule strong,
@@ -451,8 +452,8 @@ function profilePath(ownerType: "USER" | "ORGANIZATION", username: string): stri
 }
 
 .user-capsule small {
-  color: var(--muted);
-  font-size: 11px;
+  color: var(--onix-color-text-muted);
+  font-size: var(--onix-font-size-caption);
   font-weight: 800;
 }
 
@@ -465,7 +466,7 @@ function profilePath(ownerType: "USER" | "ORGANIZATION", username: string): stri
   align-items: center;
   gap: 8px;
   transform: translateX(-50%);
-  color: var(--muted);
+  color: var(--onix-color-text-muted);
   font-weight: 900;
 }
 
@@ -489,12 +490,12 @@ function profilePath(ownerType: "USER" | "ORGANIZATION", username: string): stri
 }
 
 .social-state p {
-  color: var(--muted);
+  color: var(--onix-color-text-muted);
   font-weight: 800;
 }
 
 .social-state a {
-  color: var(--text);
+  color: var(--onix-color-text);
   font-weight: 900;
 }
 

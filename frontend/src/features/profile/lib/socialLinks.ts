@@ -23,16 +23,16 @@ export interface SocialPlatformMeta {
 }
 
 const platformMeta: Record<SocialPlatform, SocialPlatformMeta> = {
-  telegram: { key: "telegram", label: "Telegram", glyph: "TG", color: "#229ed9" },
-  instagram: { key: "instagram", label: "Instagram", glyph: "IG", color: "#e94891" },
-  x: { key: "x", label: "X", glyph: "X", color: "#17191c" },
-  tiktok: { key: "tiktok", label: "TikTok", glyph: "TT", color: "#111820" },
-  youtube: { key: "youtube", label: "YouTube", glyph: "YT", color: "#ff0033" },
-  github: { key: "github", label: "GitHub", glyph: "GH", color: "#24292f" },
-  linkedin: { key: "linkedin", label: "LinkedIn", glyph: "in", color: "#0a66c2" },
-  email: { key: "email", label: "Email", glyph: "@", color: "#d88a00" },
-  phone: { key: "phone", label: "Phone", glyph: "TEL", color: "#2fa55a" },
-  website: { key: "website", label: "Website", glyph: "WWW", color: "#3478f6" },
+  telegram: { key: "telegram", label: "Telegram", glyph: "TG", color: brands.telegram },
+  instagram: { key: "instagram", label: "Instagram", glyph: "IG", color: brands.instagram },
+  x: { key: "x", label: "X", glyph: "X", color: brands.x },
+  tiktok: { key: "tiktok", label: "TikTok", glyph: "TT", color: brands.tiktok },
+  youtube: { key: "youtube", label: "YouTube", glyph: "YT", color: brands.youtube },
+  github: { key: "github", label: "GitHub", glyph: "GH", color: brands.github },
+  linkedin: { key: "linkedin", label: "LinkedIn", glyph: "in", color: brands.linkedin },
+  email: { key: "email", label: "Email", glyph: "@", color: brands.email },
+  phone: { key: "phone", label: "Phone", glyph: "TEL", color: brands.phone },
+  website: { key: "website", label: "Website", glyph: "WWW", color: brands.website },
 };
 
 export interface SocialLinkView {
@@ -92,3 +92,4 @@ function displayUrl(url: URL): string {
   const path = url.pathname === "/" ? "" : url.pathname.replace(/\/$/, "");
   return `${host}${path}`;
 }
+import { brands } from "@onix/design-system";

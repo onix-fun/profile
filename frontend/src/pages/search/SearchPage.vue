@@ -1,13 +1,16 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { useToast } from "primevue/usetoast";
+import { useOnixToast } from "@/shared/ui/toast";
 import { ContentService } from "@/shared/api/contentService";
 import { ProfileService } from "@/shared/api/profileService";
 import { contentUrl, isContentPath } from "@/shared/api/navigation";
 import { displayUsername, postSnippet } from "@/features/display/lib/displayText";
 import { embedQuery, postEmbedNavigation, withEmbedQuery } from "@/features/embed/lib/profileEmbed";
 import type { FeedItem, SearchFacet, SearchItem, SearchProviderStatus, SearchSuggestion } from "@/shared/api/types";
+import { activateFocusTrap } from "@/shared/lib/focusTrap";
+import OnixIcon from "@/shared/ui/OnixIcon.vue";
+import { onixIconName } from "@/shared/lib/icons";
 
 type SearchTypeFilter = "posts" | "collections" | "tags";
 type SortMode = "relevance" | "new" | "popular";
@@ -29,7 +32,7 @@ const SEARCH_FILTERS_KEY = "onix.search.filters";
 
 const router = useRouter();
 const route = useRoute();
-const toast = useToast();
+const toast = useOnixToast();
 
 const query = ref("");
 const selectedTypes = ref<SearchTypeFilter[]>([]);
@@ -52,12 +55,14 @@ const isSearchFocused = ref(false);
 const isLoading = ref(false);
 const isSuggesting = ref(false);
 const filtersOpen = ref(false);
+const filterDialog = ref<HTMLElement | null>(null);
+let deactivateFilterTrap: (() => void) | null = null;
 let suggestTimer: number | undefined;
 
 const sortFilters: Array<{ id: SortMode; label: string; icon: string }> = [
-  { id: "relevance", label: "Best", icon: "pi pi-sparkles" },
-  { id: "new", label: "Newest", icon: "pi pi-clock" },
-  { id: "popular", label: "Popular", icon: "pi pi-heart" },
+  { id: "relevance", label: "Best", icon: "star" },
+  { id: "new", label: "Newest", icon: "clock" },
+  { id: "popular", label: "Popular", icon: "heart" },
 ];
 
 const dateFacetFallback: SearchFacet[] = [
@@ -75,10 +80,10 @@ const visibleHistory = computed(() => {
 
 const facetGroups = computed(() => {
   const groups = [
-    { key: "type", title: "Content type", icon: "pi pi-th-large" },
-    { key: "provider", title: "Source", icon: "pi pi-database" },
-    { key: "tag", title: "Tags", icon: "pi pi-hashtag" },
-    { key: "owner", title: "Owners", icon: "pi pi-user" },
+    { key: "type", title: "Content type", icon: "grid" },
+    { key: "provider", title: "Source", icon: "file" },
+    { key: "tag", title: "Tags", icon: "filter" },
+    { key: "owner", title: "Owners", icon: "user" },
   ].map((group) => ({
     ...group,
     items: facets.value.filter((facet) => facet.group === group.key).slice(0, group.key === "tag" ? 10 : 8),
@@ -87,7 +92,7 @@ const facetGroups = computed(() => {
   groups.push({
     key: "dateRange",
     title: "Date",
-    icon: "pi pi-calendar",
+    icon: "calendar",
     items: (dates.length ? dates : dateFacetFallback).map((facet) => ({
       ...facet,
       selected: selectedDateRange.value === facet.value,
@@ -126,6 +131,15 @@ watch(query, () => {
   }
   suggestTimer = window.setTimeout(() => void loadSuggestions(text), 180);
 });
+
+watch(filtersOpen, async (open) => {
+  deactivateFilterTrap?.();
+  deactivateFilterTrap = null;
+  if (!open) return;
+  await nextTick();
+  if (filterDialog.value) deactivateFilterTrap = activateFocusTrap(filterDialog.value, () => { filtersOpen.value = false; });
+});
+onBeforeUnmount(() => deactivateFilterTrap?.());
 
 async function loadDiscover() {
   try {
@@ -300,9 +314,9 @@ function openDiscover(item: FeedItem) {
 }
 
 function iconFor(item: SearchItem): string {
-  if (item.type === "COLLECTION") return "pi pi-folder";
-  if (item.type === "TAG") return "pi pi-hashtag";
-  return "pi pi-file";
+  if (item.type === "COLLECTION") return "bookmark";
+  if (item.type === "TAG") return "filter";
+  return "file";
 }
 
 function thumbnailSrc(item: SearchItem): string {
@@ -429,7 +443,7 @@ function stringQuery(value: unknown): string {
   <main class="search-shell">
     <section class="search-command">
       <div class="search-bar" :class="{ 'is-focused': isSearchFocused }">
-        <i class="pi pi-search"></i>
+        <OnixIcon name="search" :size="20" />
         <input
           v-model="query"
           type="search"
@@ -438,23 +452,23 @@ function stringQuery(value: unknown): string {
           @keydown.enter.prevent="submitSearch"
         />
         <button v-if="query" type="button" class="icon-button" aria-label="Clear search" @click="clearQuery">
-          <i class="pi pi-times"></i>
+          <OnixIcon name="close" :size="18" />
         </button>
         <button type="button" class="submit-button" :disabled="isLoading || (!query.trim() && selectedTags.length === 0)" aria-label="Search" @click="submitSearch">
-          <i :class="isLoading ? 'pi pi-spin pi-spinner' : 'pi pi-arrow-right'"></i>
+          <OnixIcon :name="isLoading ? 'refresh' : 'arrow-right'" :class="{ 'onix-icon--spin': isLoading }" :size="18" />
         </button>
       </div>
 
       <section v-if="showHistory" class="suggest-panel" aria-label="Recent searches">
         <button v-for="item in visibleHistory" :key="item.searchedAt" type="button" @click="applyHistory(item)">
-          <i class="pi pi-history"></i>
+          <OnixIcon name="clock" :size="18" />
           <span>{{ item.query || item.tags.map((tag) => `#${tag}`).join(" ") }}</span>
         </button>
       </section>
 
       <section v-else-if="showSuggestions" class="suggest-panel" aria-label="Search suggestions">
         <button v-for="suggestion in suggestions" :key="`${suggestion.type}:${suggestion.value}`" type="button" @click="applySuggestion(suggestion)">
-          <i :class="suggestion.owner ? 'pi pi-user' : suggestion.type === 'TAG' ? 'pi pi-hashtag' : 'pi pi-search'"></i>
+          <OnixIcon :name="suggestion.owner ? 'user' : suggestion.type === 'TAG' ? 'filter' : 'search'" :size="18" />
           <span>{{ suggestion.label }}</span>
         </button>
       </section>
@@ -467,7 +481,7 @@ function stringQuery(value: unknown): string {
           <button v-if="activeFilterCount" type="button" @click="clearFilters">Clear</button>
         </div>
         <section v-for="group in facetGroups" :key="group.key" class="facet-group">
-          <h2><i :class="group.icon"></i>{{ group.title }}</h2>
+          <h2><OnixIcon :name="onixIconName(group.icon)" :size="18" />{{ group.title }}</h2>
           <button
             v-for="facet in group.items"
             :key="`${facet.group}:${facet.value}`"
@@ -484,7 +498,7 @@ function stringQuery(value: unknown): string {
       <section class="results-column">
         <div class="mobile-filter-row">
           <button type="button" @click="filtersOpen = true">
-            <i class="pi pi-sliders-h"></i>
+            <OnixIcon name="filter" :size="18" />
             <span>Filters</span>
             <strong v-if="activeFilterCount">{{ activeFilterCount }}</strong>
           </button>
@@ -492,11 +506,11 @@ function stringQuery(value: unknown): string {
 
         <section v-if="degradedStatuses.length || partialErrors.length" class="provider-strip" aria-label="Search provider status">
           <span v-for="status in degradedStatuses" :key="status.providerKey">
-            <i class="pi pi-exclamation-circle"></i>
+            <OnixIcon name="warning" :size="18" />
             {{ status.label }} {{ status.status }}
           </span>
           <span v-for="error in partialErrors.slice(0, 2)" :key="error">
-            <i class="pi pi-info-circle"></i>
+            <OnixIcon name="info" :size="18" />
             {{ error }}
           </span>
         </section>
@@ -514,7 +528,7 @@ function stringQuery(value: unknown): string {
               :class="{ active: sortMode === sort.id }"
               @click="setSort(sort.id)"
             >
-              <i :class="sort.icon"></i>
+              <OnixIcon :name="onixIconName(sort.icon)" :size="18" />
               <span>{{ sort.label }}</span>
             </button>
           </div>
@@ -524,7 +538,7 @@ function stringQuery(value: unknown): string {
           <div v-if="history.length" class="recent-list">
             <h2>Recent searches</h2>
             <button v-for="item in history.slice(0, 5)" :key="item.searchedAt" type="button" @click="applyHistory(item)">
-              <i class="pi pi-history"></i>
+              <OnixIcon name="clock" :size="18" />
               <span>{{ item.query || item.tags.map((tag) => `#${tag}`).join(" ") }}</span>
             </button>
           </div>
@@ -543,7 +557,7 @@ function stringQuery(value: unknown): string {
           <article v-for="item in results" :key="`${item.type}:${item.id}`" class="result-row" @click="openResult(item)">
             <span class="result-thumb">
               <img v-if="thumbnailSrc(item)" :src="thumbnailSrc(item)" alt="" />
-              <i v-else :class="iconFor(item)"></i>
+              <OnixIcon v-else :name="onixIconName(iconFor(item))" :size="22" />
             </span>
             <span class="result-copy">
               <span class="result-meta">
@@ -562,27 +576,27 @@ function stringQuery(value: unknown): string {
         </section>
 
         <section v-else-if="hasSearched && !isLoading" class="empty-state">
-          <i class="pi pi-search"></i>
+          <OnixIcon name="search" :size="28" />
           <strong>No results</strong>
           <span>Try a broader query or clear one of the filters.</span>
         </section>
 
         <button v-if="nextCursor" type="button" class="load-more" :disabled="isLoading" @click="loadMore">
-          <i :class="isLoading ? 'pi pi-spin pi-spinner' : 'pi pi-plus'"></i>
+          <OnixIcon :name="isLoading ? 'refresh' : 'add'" :class="{ 'onix-icon--spin': isLoading }" :size="18" />
           <span>Load more</span>
         </button>
       </section>
     </div>
 
-    <div v-if="filtersOpen" class="filter-drawer" role="dialog" aria-modal="true" aria-label="Search filters">
+    <div v-if="filtersOpen" class="filter-drawer">
       <button type="button" class="drawer-backdrop" aria-label="Close filters" @click="filtersOpen = false"></button>
-      <section class="drawer-panel">
+      <section ref="filterDialog" class="drawer-panel" role="dialog" aria-modal="true" aria-label="Search filters" tabindex="-1">
         <div class="filter-heading">
           <span>Filters</span>
           <button type="button" @click="filtersOpen = false">Done</button>
         </div>
         <section v-for="group in facetGroups" :key="group.key" class="facet-group">
-          <h2><i :class="group.icon"></i>{{ group.title }}</h2>
+          <h2><OnixIcon :name="onixIconName(group.icon)" :size="18" />{{ group.title }}</h2>
           <button
             v-for="facet in group.items"
             :key="`${facet.group}:${facet.value}`"
@@ -602,8 +616,8 @@ function stringQuery(value: unknown): string {
 <style scoped>
 .search-shell {
   min-height: 100dvh;
-  background: #fafafa;
-  color: #111827;
+  background: var(--onix-color-surface-muted);
+  color: var(--onix-color-text);
   padding: 78px clamp(12px, 3vw, 28px) 42px;
 }
 
@@ -617,52 +631,52 @@ function stringQuery(value: unknown): string {
 
 .search-bar {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto 40px;
+  grid-template-columns: auto minmax(0, 1fr) auto var(--onix-control-md);
   align-items: center;
   gap: 8px;
   min-height: 48px;
   padding: 5px 6px 5px 16px;
-  border: 1px solid #dbdbdb;
+  
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.07);
+  background: var(--onix-color-surface-floating);
+  
   backdrop-filter: blur(14px);
 }
 
 .search-bar.is-focused {
-  border-color: #a8a8a8;
+  
 }
 
 .search-bar input {
   min-width: 0;
-  border: 0;
-  outline: 0;
+  
+  
   background: transparent;
-  color: var(--text);
+  color: var(--onix-color-text);
   font: inherit;
 }
 
 button {
-  border: 0;
+  
   font: inherit;
 }
 
 .icon-button,
 .submit-button {
-  width: 36px;
-  height: 36px;
-  border-radius: 999px;
+  width: var(--onix-control-md);
+  height: var(--onix-control-md);
+  border-radius: var(--onix-radius-pill);
   cursor: pointer;
 }
 
 .icon-button {
   background: transparent;
-  color: var(--muted);
+  color: var(--onix-color-text-muted);
 }
 
 .submit-button {
-  background: #0095f6;
-  color: #ffffff;
+  background: var(--onix-tone-solid);
+  color: var(--onix-tone-on-solid);
 }
 
 .submit-button:disabled {
@@ -678,10 +692,10 @@ button {
   display: grid;
   gap: 4px;
   padding: 8px;
-  border: 1px solid #dbdbdb;
+  
   border-radius: 12px;
-  background: #ffffff;
-  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.14);
+  background: var(--onix-color-surface-base);
+  
 }
 
 .suggest-panel button,
@@ -698,11 +712,11 @@ button {
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 42px;
+  min-height: var(--onix-control-md);
   padding: 0 10px;
   border-radius: 8px;
   background: transparent;
-  color: var(--text);
+  color: var(--onix-color-text);
   text-align: left;
 }
 
@@ -742,11 +756,11 @@ button {
 }
 
 .filter-heading button {
-  min-height: 30px;
+  min-height: var(--onix-control-md);
   padding: 0 10px;
-  border-radius: 999px;
-  background: #efefef;
-  color: #111827;
+  border-radius: var(--onix-radius-pill);
+  background: var(--onix-color-surface-muted);
+  color: var(--onix-color-text);
   cursor: pointer;
   font-weight: 800;
 }
@@ -763,8 +777,8 @@ button {
   align-items: center;
   gap: 8px;
   margin: 0;
-  color: #737373;
-  font-size: 11px;
+  color: var(--onix-color-text-muted);
+  font-size: var(--onix-font-size-caption);
   font-weight: 900;
   text-transform: uppercase;
 }
@@ -773,12 +787,12 @@ button {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  min-height: 34px;
+  min-height: var(--onix-control-md);
   padding: 0 12px;
-  border-radius: 999px;
-  background: #ffffff;
-  border: 1px solid #dbdbdb;
-  color: #111827;
+  border-radius: var(--onix-radius-pill);
+  background: var(--onix-color-surface-base);
+  
+  color: var(--onix-color-text);
   text-align: left;
 }
 
@@ -789,7 +803,7 @@ button {
 }
 
 .facet-group button strong {
-  color: #737373;
+  color: var(--onix-color-text-muted);
   font-size: 12px;
 }
 
@@ -799,18 +813,18 @@ button {
 .recent-list button:hover,
 .result-row:hover,
 .discover-item:hover {
-  background: #efefef;
+  background: var(--onix-color-surface-muted);
 }
 
 .facet-group button.active {
-  border-color: #111827;
-  background: #111827;
-  color: #ffffff;
+  
+  background: var(--onix-color-text);
+  color: var(--onix-tone-on-solid);
   font-weight: 900;
 }
 
 .facet-group button.active strong {
-  color: rgba(255, 255, 255, 0.74);
+  color: var(--onix-color-surface-floating);
 }
 
 .results-column {
@@ -835,16 +849,16 @@ button {
   gap: 6px;
   min-height: 30px;
   padding: 0 10px;
-  border-radius: 999px;
-  background: #fef3c7;
-  color: #7c2d12;
+  border-radius: var(--onix-radius-pill);
+  background: var(--onix-color-tone-warning-soft);
+  color: var(--onix-color-tone-warning-ink);
   font-size: 12px;
   font-weight: 800;
 }
 
 .result-toolbar {
   min-height: 40px;
-  border-bottom: 1px solid #dbdbdb;
+  
   padding-bottom: 10px;
 }
 
@@ -854,7 +868,7 @@ button {
 }
 
 .result-toolbar span {
-  color: #737373;
+  color: var(--onix-color-text-muted);
   font-size: 12px;
 }
 
@@ -862,25 +876,25 @@ button {
   display: inline-flex;
   gap: 4px;
   padding: 3px;
-  border-radius: 999px;
-  background: #efefef;
+  border-radius: var(--onix-radius-pill);
+  background: var(--onix-color-surface-muted);
 }
 
 .sort-control button {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 32px;
+  min-height: var(--onix-control-md);
   padding: 0 10px;
-  border-radius: 999px;
+  border-radius: var(--onix-radius-pill);
   background: transparent;
-  color: #737373;
+  color: var(--onix-color-text-muted);
   font-weight: 800;
 }
 
 .sort-control button.active {
-  background: #ffffff;
-  color: #111827;
+  background: var(--onix-color-surface-base);
+  color: var(--onix-color-text);
 }
 
 .start-state {
@@ -906,9 +920,9 @@ button {
 
 .discover-item,
 .result-row {
-  border: 1px solid #dbdbdb;
+  
   border-radius: 0;
-  background: #ffffff;
+  background: var(--onix-color-surface-base);
   cursor: pointer;
 }
 
@@ -918,14 +932,14 @@ button {
   display: grid;
   align-content: end;
   gap: 10px;
-  background: linear-gradient(180deg, #f5f5f5, #ffffff);
+  background: var(--onix-color-surface-muted);
 }
 
 .discover-item p,
 .result-copy p,
 .result-meta,
 .empty-state span {
-  color: #737373;
+  color: var(--onix-color-text-muted);
 }
 
 .discover-item footer,
@@ -935,7 +949,7 @@ button {
   gap: 6px;
   font-size: 12px;
   font-weight: 800;
-  color: var(--muted);
+  color: var(--onix-color-text-muted);
 }
 
 .result-list {
@@ -961,8 +975,8 @@ button {
   display: grid;
   place-items: center;
   overflow: hidden;
-  background: #efefef;
-  color: #111827;
+  background: var(--onix-color-surface-muted);
+  color: var(--onix-color-text);
   font-size: 28px;
 }
 
@@ -984,7 +998,7 @@ button {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  font-size: 11px;
+  font-size: var(--onix-font-size-caption);
   font-weight: 800;
 }
 
@@ -1004,14 +1018,14 @@ button {
   place-items: center;
   align-content: center;
   gap: 8px;
-  border: 1px dashed #dbdbdb;
+  
   border-radius: 12px;
-  color: #737373;
-  background: #ffffff;
+  color: var(--onix-color-text-muted);
+  background: var(--onix-color-surface-base);
 }
 
 .empty-state strong {
-  color: #111827;
+  color: var(--onix-color-text);
 }
 
 .load-more {
@@ -1019,11 +1033,11 @@ button {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  min-height: 40px;
+  min-height: var(--onix-control-md);
   padding: 0 14px;
-  border-radius: 999px;
-  background: #0095f6;
-  color: #ffffff;
+  border-radius: var(--onix-radius-pill);
+  background: var(--onix-tone-solid);
+  color: var(--onix-tone-on-solid);
   font-weight: 900;
 }
 
@@ -1038,7 +1052,7 @@ button {
   inset: 0;
   width: 100%;
   height: 100%;
-  background: rgba(15, 23, 42, 0.32);
+  background: var(--onix-color-overlay);
 }
 
 .drawer-panel {
@@ -1052,7 +1066,7 @@ button {
   gap: 14px;
   padding: 16px;
   border-radius: 14px 14px 0 0;
-  background: #ffffff;
+  background: var(--onix-color-surface-base);
 }
 
 @media (max-width: 860px) {
@@ -1076,23 +1090,23 @@ button {
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    min-height: 38px;
+    min-height: var(--onix-control-md);
     padding: 0 12px;
-    border-radius: 999px;
-    background: #ffffff;
-    border: 1px solid #dbdbdb;
-    color: #111827;
+    border-radius: var(--onix-radius-pill);
+    background: var(--onix-color-surface-base);
+    
+    color: var(--onix-color-text);
     font-weight: 900;
   }
 
   .mobile-filter-row strong {
     min-width: 20px;
     height: 20px;
-    border-radius: 999px;
+    border-radius: var(--onix-radius-pill);
     display: grid;
     place-items: center;
-    background: #0095f6;
-    color: #ffffff;
+    background: var(--onix-tone-solid);
+    color: var(--onix-tone-on-solid);
     font-size: 12px;
   }
 
@@ -1113,15 +1127,15 @@ button {
 
 @media (max-width: 540px) {
   .search-bar {
-    grid-template-columns: auto minmax(0, 1fr) auto 40px;
+    grid-template-columns: auto minmax(0, 1fr) auto var(--onix-control-md);
     min-height: 52px;
     padding-left: 12px;
   }
 
   .icon-button,
   .submit-button {
-    width: 38px;
-    height: 38px;
+    width: var(--onix-control-md);
+    height: var(--onix-control-md);
   }
 
   .result-meta {

@@ -81,12 +81,14 @@ describe("navigation helpers", () => {
 });
 
 describe("app shell navigation", () => {
-  it("uses absolute content links for feed navigation", async () => {
+  it("exposes feed and creation routes through the graph menu", async () => {
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [
         { path: "/", component: { template: "<div />" } },
         { path: "/search", component: { template: "<div />" } },
+        { path: "/u/:nickname", component: { template: "<div />" } },
+        { path: "/u/:nickname/social", component: { template: "<div />" } },
       ],
     });
     router.push("/search");
@@ -97,10 +99,12 @@ describe("app shell navigation", () => {
       slots: { default: "<div>search</div>" },
     });
     await Promise.resolve();
-    await wrapper.find(".avatar-menu-button").trigger("click");
+    await wrapper.find(".onix-graph-menu__fab").trigger("click");
+    await wrapper.vm.$nextTick();
 
-    expect(wrapper.find(".brand-mark").attributes("href")).toBe("http://content.onix.localhost:8088/");
-    expect(wrapper.find('.account-menu__nav a[href="http://content.onix.localhost:8088/"]').exists()).toBe(true);
+    expect(wrapper.find(".onix-graph-menu").attributes("data-open")).toBe("true");
+    expect(wrapper.find('[data-node-id="feed"]').exists()).toBe(true);
+    expect(wrapper.find(".onix-graph-menu__fab").attributes("aria-expanded")).toBe("true");
     expect(ContentService.currentActor).toHaveBeenCalled();
   });
 });
@@ -123,7 +127,7 @@ describe("profile embed mode", () => {
 
     expect(wrapper.find(".embedded-profile").exists()).toBe(true);
     expect(wrapper.find(".app-shell").exists()).toBe(false);
-    expect(wrapper.find(".avatar-menu-button").exists()).toBe(false);
+    expect(wrapper.find(".onix-graph-menu__fab").exists()).toBe(false);
 
     wrapper.unmount();
   });
@@ -145,6 +149,24 @@ describe("profile embed mode", () => {
 
     expect(wrapper.find(".app-shell").exists()).toBe(true);
 
+    wrapper.unmount();
+  });
+
+  it("renders standalone search without graph navigation", async () => {
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: "/search", name: "Search", component: { template: "<main class=\"standalone-search\">search</main>" } }],
+    });
+    await router.push("/search");
+    await router.isReady();
+
+    const wrapper = mount(App, {
+      global: { plugins: [router], components: { PToast: { template: "<div />" } } },
+    });
+
+    expect(wrapper.find(".standalone-search").exists()).toBe(true);
+    expect(wrapper.find(".app-shell").exists()).toBe(false);
+    expect(wrapper.find(".onix-graph-menu__fab").exists()).toBe(false);
     wrapper.unmount();
   });
 

@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { useToast } from "primevue/usetoast";
+import { useOnixToast } from "@/shared/ui/toast";
+import { useI18n } from "vue-i18n";
+import { themes } from "@onix/design-system";
 import { apiErrorMessage } from "@/shared/api/client";
 import { redirectToAccount } from "@/shared/api/authRedirect";
 import { ContentService } from "@/shared/api/contentService";
@@ -17,10 +19,13 @@ import {
   type ProfileCanvasSize,
 } from "@/features/profile/lib/profileCanvasLayout";
 import { describeSocialLink } from "@/features/profile/lib/socialLinks";
+import OnixIcon from "@/shared/ui/OnixIcon.vue";
+import { onixIconName } from "@/shared/lib/icons";
 
 const route = useRoute();
 const router = useRouter();
-const toast = useToast();
+const toast = useOnixToast();
+const { t } = useI18n();
 
 const isLoading = ref(true);
 const errorCode = ref<string | null>(null);
@@ -59,9 +64,9 @@ const followLabel = computed(() => {
   return "Follow";
 });
 const followIcon = computed(() => {
-  if (relationship.value?.hasPendingRequest) return "pi pi-clock";
-  if (relationship.value?.isFollowing) return "pi pi-check";
-  return "pi pi-user-plus";
+  if (relationship.value?.hasPendingRequest) return "clock" as const;
+  if (relationship.value?.isFollowing) return "check" as const;
+  return "users" as const;
 });
 const canvasLayout = computed(() => (
   response.value ? buildProfileCanvasLayout(response.value, viewportSize.value, {
@@ -79,8 +84,8 @@ const rawNavButtons = computed<ProfileNavButton[]>(() => response.value?.navigat
       serviceKey: "profile",
       featureKey: "collections",
       label: "Collections",
-      icon: "pi pi-bookmark",
-      color: "#111827",
+      icon: "bookmark",
+      color: "var(--onix-color-text)",
       mode: "canvas",
       kind: "collections",
       backendOperation: "collections",
@@ -127,7 +132,7 @@ watch(canvasLayout, async () => {
 
 onMounted(() => {
   themeObserver = new MutationObserver(() => scheduleCanvasDraw());
-  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-onix-theme"] });
   void loadProfile();
 });
 onBeforeUnmount(() => {
@@ -288,7 +293,7 @@ function navButtonStyle(button: ProfileNavButton, index: number) {
   return {
     left: `${position.left}px`,
     top: `${position.top}px`,
-    "--button-color": button.color,
+    "--onix-profile-button-color": button.color,
   };
 }
 
@@ -300,8 +305,8 @@ function createButtonStyle() {
       serviceKey: "profile",
       featureKey: "collections",
       label: "Create",
-      icon: "pi pi-plus",
-      color: "#111827",
+      icon: "add",
+      color: "var(--onix-color-text)",
       mode: "canvas",
       kind: "action",
     }, index),
@@ -412,8 +417,9 @@ function drawCanvas() {
   context.clearRect(0, 0, layout.stage.width, layout.stage.height);
 
   const styles = getComputedStyle(document.documentElement);
-  const stroke = styles.getPropertyValue("--surface-active").trim() || "#cbd5e1";
-  const muted = styles.getPropertyValue("--muted").trim() || "#64748b";
+  const theme = document.documentElement.dataset.onixTheme === "dark" ? themes.dark : themes.light;
+  const stroke = styles.getPropertyValue("--onix-color-text-subtle").trim() || theme.textSubtle;
+  const muted = styles.getPropertyValue("--onix-color-text-muted").trim() || theme.textMuted;
 
   context.lineWidth = 1.7;
   context.lineCap = "round";
@@ -449,17 +455,23 @@ function drawCanvas() {
   <main class="profile-shell">
     <section v-if="isLoading" class="state-screen">
       <div class="loader" aria-hidden="true"></div>
-      <span>Loading profile</span>
+      <span>{{ t("profile.loading") }}</span>
     </section>
 
     <section v-else-if="errorCode === 'NOT_FOUND'" class="state-screen">
-      <i class="pi pi-search"></i>
-      <h1>Profile not found</h1>
-      <p>The username does not exist or is no longer available.</p>
+      <OnixIcon name="search" :size="28" />
+      <h1>{{ t("profile.notFound") }}</h1>
+      <p>{{ t("profile.notFoundHint") }}</p>
+    </section>
+
+    <section v-else-if="errorCode" class="state-screen">
+      <OnixIcon name="warning" :size="28" />
+      <h1>{{ t("profile.failed") }}</h1>
+      <p>{{ t("common.retry") }}</p>
     </section>
 
     <section v-else-if="isBlocked" class="state-screen">
-      <i class="pi pi-ban"></i>
+      <OnixIcon name="lock" :size="28" />
       <h1>Profile unavailable</h1>
       <p>This relationship blocks profile viewing.</p>
     </section>
@@ -470,7 +482,7 @@ function drawCanvas() {
           <img v-if="profile.avatarUrl" :src="profile.avatarUrl" alt="" />
           <span v-else>{{ displayName.slice(0, 2).toUpperCase() }}</span>
         </span>
-        <i class="pi pi-lock private-lock" aria-hidden="true"></i>
+        <OnixIcon name="lock" class="private-lock" :size="28" aria-hidden="true" />
         <h1>{{ displayName }}</h1>
         <p>@{{ profile.username }}</p>
         <strong>Private profile</strong>
@@ -481,7 +493,7 @@ function drawCanvas() {
           :disabled="!canFollow || relationship?.hasPendingRequest"
           @click="toggleFollow"
         >
-          <i :class="followIcon"></i>
+          <OnixIcon :name="followIcon" :size="18" />
           <span>{{ relationship?.hasPendingRequest ? "Requested" : "Request access" }}</span>
         </button>
       </div>
@@ -501,7 +513,7 @@ function drawCanvas() {
               :style="navButtonStyle(button, index)"
               @click="handleNavButton(button)"
             >
-              <i :class="button.icon"></i>
+              <OnixIcon :name="onixIconName(button.icon, 'grid')" :size="20" />
             </button>
             <button
               v-if="isOwner && activeMode === 'collections'"
@@ -511,7 +523,7 @@ function drawCanvas() {
               :style="createButtonStyle()"
               @click="isCreatingCollection = !isCreatingCollection"
             >
-              <i class="pi pi-plus"></i>
+              <OnixIcon name="add" :size="20" />
             </button>
           </nav>
 
@@ -529,17 +541,17 @@ function drawCanvas() {
                 :class="{ 'is-active': newCollectionVisibility === 'PRIVATE' }"
                 @click="newCollectionVisibility = 'PRIVATE'"
               >
-                <i class="pi pi-lock"></i>
+                <OnixIcon name="lock" :size="18" />
               </button>
               <button
                 type="button"
                 :class="{ 'is-active': newCollectionVisibility === 'PUBLIC' }"
                 @click="newCollectionVisibility = 'PUBLIC'"
               >
-                <i class="pi pi-globe"></i>
+                <OnixIcon name="globe" :size="18" />
               </button>
               <button type="submit" :disabled="!newCollectionTitle.trim()">
-                <i class="pi pi-check"></i>
+                <OnixIcon name="check" :size="18" />
               </button>
             </span>
           </form>
@@ -589,7 +601,7 @@ function drawCanvas() {
                 :style="nodeStyle(node)"
                 @click="openSocial"
               >
-                <i class="pi pi-users"></i>
+                <OnixIcon name="users" :size="22" />
                 <strong>{{ nodeLabel(node) || "Social" }}</strong>
                 <span>{{ String(node.data.subscribersLabel || "Subscribers") }}</span>
                 <span>{{ String(node.data.subscriptionsLabel || "Subscriptions") }}</span>
@@ -601,7 +613,7 @@ function drawCanvas() {
                 :style="nodeStyle(node)"
               >
                 <div class="links-hub">
-                  <i class="pi pi-link"></i>
+                  <OnixIcon name="link" :size="20" />
                   <span>Links</span>
                 </div>
                 <div class="links-branches">
@@ -609,7 +621,7 @@ function drawCanvas() {
                   v-for="link in socialLinkViews()"
                   :key="`${link.label}-${link.url}`"
                   class="link-branch"
-                  :style="{ '--link-color': link.meta.color }"
+                  :style="{ '--onix-profile-link-color': link.meta.color }"
                   :href="link.href"
                   target="_blank"
                   rel="noreferrer"
@@ -631,7 +643,7 @@ function drawCanvas() {
                 :disabled="!canFollow || relationship?.hasPendingRequest"
                 @click="toggleFollow"
               >
-                <i :class="followIcon"></i>
+                <OnixIcon :name="followIcon" :size="18" />
                 <span>{{ followLabel }}</span>
               </button>
 
@@ -641,7 +653,7 @@ function drawCanvas() {
                 type="button"
                 :style="nodeStyle(node)"
               >
-                <i class="pi pi-history"></i>
+                <OnixIcon name="clock" :size="20" />
                 <strong>{{ nodeLabel(node) }}</strong>
                 <span>{{ nodeCaption(node) }}</span>
               </button>
@@ -674,11 +686,11 @@ function drawCanvas() {
                       alt=""
                     />
                   </template>
-                  <i v-else class="pi pi-bookmark"></i>
+                  <OnixIcon v-else name="bookmark" :size="24" />
                 </span>
                 <strong>{{ nodeCollection(node)!.title }}</strong>
                 <small>{{ nodeCollection(node)!.description || `${nodeCollection(node)!.itemCount} posts` }}</small>
-                <i v-if="isOwner" :class="nodeCollection(node)!.visibility === 'PUBLIC' ? 'pi pi-globe' : 'pi pi-lock'"></i>
+                <OnixIcon v-if="isOwner" :name="nodeCollection(node)!.visibility === 'PUBLIC' ? 'globe' : 'lock'" :size="16" />
               </button>
             </template>
           </div>
@@ -692,18 +704,13 @@ function drawCanvas() {
       @close="savingPostId = null"
     />
 
-    <section v-else class="state-screen">
-      <i class="pi pi-exclamation-triangle"></i>
-      <h1>Unable to load profile</h1>
-      <p>Try again later.</p>
-    </section>
   </main>
 </template>
 
 <style scoped>
 .profile-shell {
   min-height: 100dvh;
-  background: var(--bg);
+  background: var(--onix-color-surface-page);
 }
 
 .canvas-shell {
@@ -753,18 +760,18 @@ function drawCanvas() {
 
 .profile-mode-nav button {
   position: absolute;
-  width: 42px;
-  height: 42px;
-  border: 1px solid var(--surface-active);
-  border-radius: 999px;
+  width: var(--onix-control-md);
+  height: var(--onix-control-md);
+  
+  border-radius: var(--onix-radius-pill);
   display: grid;
   place-items: center;
-  background: var(--surface-raised);
-  color: var(--muted);
-  box-shadow: 0 12px 34px rgba(15, 23, 42, 0.14);
+  background: var(--onix-color-surface-floating);
+  color: var(--onix-color-text-muted);
+  
   cursor: pointer;
   pointer-events: auto;
-  transition: transform 180ms ease, background 180ms ease, color 180ms ease;
+  transition: transform var(--onix-motion-fast), background var(--onix-motion-fast), color var(--onix-motion-fast);
 }
 
 .profile-mode-nav button:nth-child(1) {
@@ -785,18 +792,18 @@ function drawCanvas() {
 .profile-mode-nav button:hover,
 .profile-mode-nav button.is-active {
   transform: translateX(5px) scale(1.04);
-  background: var(--text);
-  color: var(--surface);
+  background: var(--onix-color-text);
+  color: var(--onix-color-surface-base);
 }
 
 .profile-mode-nav button.is-route {
-  background: var(--button-color, #22c55e);
-  color: #ffffff;
-  border-color: color-mix(in srgb, var(--button-color, #22c55e) 70%, #ffffff);
+  background: var(--onix-profile-button-color, var(--onix-color-tone-success-ink));
+  color: var(--onix-tone-on-solid);
+  
 }
 
 .profile-mode-nav button.is-route:hover {
-  background: color-mix(in srgb, var(--button-color, #22c55e) 86%, #111827);
+  background: color-mix(in srgb, var(--onix-profile-button-color, var(--onix-color-tone-success-ink)) 86%, var(--onix-color-text));
 }
 
 .collection-create-card {
@@ -806,21 +813,21 @@ function drawCanvas() {
   display: grid;
   gap: 8px;
   padding: 12px;
-  border: 1px solid var(--surface-active);
+  
   border-radius: 12px;
-  background: var(--surface-raised);
-  box-shadow: 0 18px 54px rgba(15, 23, 42, 0.18);
+  background: var(--onix-color-surface-floating);
+  
 }
 
 .collection-create-card input,
 .collection-create-card textarea {
   width: 100%;
   box-sizing: border-box;
-  border: 1px solid var(--surface-active);
+  
   border-radius: 9px;
   padding: 9px 10px;
-  background: var(--surface);
-  color: var(--text);
+  background: var(--onix-color-surface-base);
+  color: var(--onix-color-text);
   font: inherit;
   resize: none;
 }
@@ -832,21 +839,21 @@ function drawCanvas() {
 }
 
 .collection-create-card button {
-  width: 34px;
-  height: 34px;
-  border: 0;
-  border-radius: 999px;
+  width: var(--onix-control-md);
+  height: var(--onix-control-md);
+  
+  border-radius: var(--onix-radius-pill);
   display: grid;
   place-items: center;
-  background: var(--surface-muted);
-  color: var(--muted);
+  background: var(--onix-color-surface-muted);
+  color: var(--onix-color-text-muted);
   cursor: pointer;
 }
 
 .collection-create-card button.is-active,
 .collection-create-card button[type="submit"] {
-  background: var(--text);
-  color: var(--surface);
+  background: var(--onix-color-text);
+  color: var(--onix-color-surface-base);
 }
 
 .collection-create-card button:disabled {
@@ -861,21 +868,21 @@ function drawCanvas() {
 }
 
 .node {
-  border: 1px solid var(--surface-active);
-  background: var(--surface-raised);
-  color: var(--text);
-  box-shadow: 0 10px 26px rgba(22, 34, 51, 0.12);
+  
+  background: var(--onix-color-surface-floating);
+  color: var(--onix-color-text);
+  
   user-select: none;
 }
 
 .node-avatar {
   width: 132px;
   height: 132px;
-  border-radius: 999px;
+  border-radius: var(--onix-radius-pill);
   display: grid;
   place-items: center;
   overflow: hidden;
-  border: 4px solid var(--surface);
+  
   font-size: 36px;
   font-weight: 900;
 }
@@ -912,7 +919,7 @@ function drawCanvas() {
   padding: 14px 16px;
   font-size: 14px;
   font-weight: 600;
-  color: var(--muted);
+  color: var(--onix-color-text-muted);
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
@@ -933,33 +940,33 @@ function drawCanvas() {
 }
 
 .node-stat span {
-  color: var(--muted);
+  color: var(--onix-color-text-muted);
   font-size: 12px;
   font-weight: 800;
 }
 
 .node-social {
-  border: 0;
+  
   display: grid;
   grid-template-columns: auto 1fr;
   align-items: center;
   gap: 3px 10px;
   padding: 13px 14px;
-  background: var(--surface-raised);
-  color: var(--text);
+  background: var(--onix-color-surface-floating);
+  color: var(--onix-color-text);
   text-align: left;
   cursor: pointer;
 }
 
-.node-social i {
+.node-social > svg {
   grid-row: 1 / span 3;
   width: 34px;
   height: 34px;
-  border-radius: 999px;
+  border-radius: var(--onix-radius-pill);
   display: grid;
   place-items: center;
-  background: var(--surface-muted);
-  color: var(--muted);
+  background: var(--onix-color-surface-muted);
+  color: var(--onix-color-text-muted);
 }
 
 .node-social strong {
@@ -969,25 +976,25 @@ function drawCanvas() {
 }
 
 .node-social span {
-  color: var(--muted);
-  font-size: 11px;
+  color: var(--onix-color-text-muted);
+  font-size: var(--onix-font-size-caption);
   font-weight: 900;
 }
 
 .node-archive {
-  border: 0;
+  
   display: grid;
   grid-template-columns: auto 1fr;
   gap: 2px 10px;
   align-items: center;
   padding: 12px 14px;
-  background: linear-gradient(135deg, rgba(17, 24, 39, 0.96), rgba(34, 197, 94, 0.82));
-  color: #ffffff;
+  background: var(--onix-tone-solid);
+  color: var(--onix-tone-on-solid);
   text-align: left;
   cursor: pointer;
 }
 
-.node-archive i {
+.node-archive > svg {
   grid-row: 1 / span 2;
   font-size: 19px;
 }
@@ -999,7 +1006,7 @@ function drawCanvas() {
 }
 
 .node-archive span {
-  color: rgba(255, 255, 255, 0.74);
+  color: var(--onix-color-surface-floating);
   font-size: 12px;
   font-weight: 900;
 }
@@ -1017,8 +1024,8 @@ function drawCanvas() {
   width: 64px;
   height: 64px;
   border-radius: 18px;
-  background: var(--surface-muted);
-  color: var(--muted);
+  background: var(--onix-color-surface-muted);
+  color: var(--onix-color-text-muted);
   display: grid;
   place-items: center;
   align-content: center;
@@ -1029,8 +1036,8 @@ function drawCanvas() {
 
 .links-hub span {
   max-width: 100%;
-  color: var(--muted);
-  font-size: 10px;
+  color: var(--onix-color-text-muted);
+  font-size: var(--onix-font-size-caption);
   line-height: 1;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -1051,8 +1058,8 @@ function drawCanvas() {
   top: 18px;
   bottom: 18px;
   width: 2px;
-  border-radius: 999px;
-  background: var(--surface-strong);
+  border-radius: var(--onix-radius-pill);
+  background: var(--onix-color-surface-active);
 }
 
 .link-branch {
@@ -1062,12 +1069,13 @@ function drawCanvas() {
   grid-template-columns: 30px minmax(0, 1fr);
   align-items: center;
   gap: 8px;
-  padding: 6px 8px 6px 6px;
+  min-height: var(--onix-control-md);
+  padding: var(--onix-space-1) var(--onix-space-2);
   border-radius: 11px;
-  color: var(--text);
+  color: var(--onix-color-text);
   text-decoration: none;
-  background: var(--surface-muted);
-  transition: transform 160ms ease, background 180ms ease;
+  background: var(--onix-color-surface-muted);
+  transition: transform var(--onix-motion-fast), background var(--onix-motion-fast);
 }
 
 .link-branch::before {
@@ -1077,14 +1085,14 @@ function drawCanvas() {
   top: 50%;
   width: 12px;
   height: 2px;
-  border-radius: 999px;
-  background: var(--link-color);
+  border-radius: var(--onix-radius-pill);
+  background: var(--onix-profile-link-color);
   transform: translateY(-50%);
 }
 
 .link-branch:hover {
   transform: translateX(2px);
-  background: var(--surface-active);
+  background: var(--onix-color-surface-active);
 }
 
 .link-branch-icon {
@@ -1094,9 +1102,9 @@ function drawCanvas() {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: color-mix(in srgb, var(--link-color) 14%, transparent);
-  color: var(--link-color);
-  font-size: 10px;
+  background: color-mix(in srgb, var(--onix-profile-link-color) 14%, transparent);
+  color: var(--onix-profile-link-color);
+  font-size: var(--onix-font-size-caption);
   line-height: 1;
   font-weight: 900;
   letter-spacing: 0;
@@ -1116,28 +1124,28 @@ function drawCanvas() {
 }
 
 .link-branch-copy strong {
-  color: var(--text);
+  color: var(--onix-color-text);
   font-size: 12px;
   line-height: 1.1;
   font-weight: 900;
 }
 
 .link-branch-copy small {
-  color: var(--muted);
-  font-size: 10px;
+  color: var(--onix-color-text-muted);
+  font-size: var(--onix-font-size-caption);
   line-height: 1.15;
   font-weight: 800;
 }
 
 .node-action {
   padding: 11px 16px;
-  border: 0;
+  
   display: inline-flex;
   justify-content: center;
   align-items: center;
   gap: 8px;
-  background: var(--btn-primary-bg);
-  color: var(--btn-primary-text);
+  background: var(--onix-tone-solid);
+  color: var(--onix-tone-on-solid);
   cursor: pointer;
   font-weight: 900;
 }
@@ -1152,37 +1160,37 @@ function drawCanvas() {
 }
 
 .node-post {
-  border: 0;
+  
   background: transparent;
-  box-shadow: none;
+  
 }
 
 .node-collection {
-  border: 0;
+  
   display: grid;
   grid-template-rows: 72px auto auto;
   gap: 5px;
   padding: 10px;
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.94);
-  color: #111827;
+  background: var(--onix-color-surface-floating);
+  color: var(--onix-color-text);
   text-align: left;
   cursor: pointer;
   overflow: hidden;
 }
 
-.node-collection > i {
+.node-collection > svg {
   position: absolute;
   right: 10px;
   top: 10px;
   width: 24px;
   height: 24px;
-  border-radius: 999px;
+  border-radius: var(--onix-radius-pill);
   display: grid;
   place-items: center;
-  background: rgba(17, 24, 39, 0.76);
-  color: #ffffff;
-  font-size: 11px;
+  background: var(--onix-color-overlay);
+  color: var(--onix-tone-on-solid);
+  font-size: var(--onix-font-size-caption);
 }
 
 .collection-preview {
@@ -1192,7 +1200,7 @@ function drawCanvas() {
   gap: 3px;
   overflow: hidden;
   border-radius: 12px;
-  background: linear-gradient(135deg, #111827, #0f766e);
+  background: var(--onix-color-surface-muted);
 }
 
 .collection-preview img {
@@ -1208,7 +1216,7 @@ function drawCanvas() {
 .collection-preview.is-empty {
   display: grid;
   place-items: center;
-  color: #ffffff;
+  color: var(--onix-tone-on-solid);
   font-size: 24px;
 }
 
@@ -1226,7 +1234,7 @@ function drawCanvas() {
 }
 
 .node-collection small {
-  color: #64748b;
+  color: var(--onix-color-text-muted);
   font-size: 12px;
   font-weight: 800;
 }
@@ -1239,17 +1247,17 @@ function drawCanvas() {
   gap: 10px;
   padding: 32px;
   text-align: center;
-  color: var(--muted);
+  color: var(--onix-color-text-muted);
 }
 
 .state-screen i {
   font-size: 28px;
-  color: var(--text);
+  color: var(--onix-color-text);
 }
 
 .state-screen h1 {
   margin: 0;
-  color: var(--text);
+  color: var(--onix-color-text);
   font-size: 24px;
   line-height: 1.2;
 }
@@ -1265,7 +1273,7 @@ function drawCanvas() {
   display: grid;
   place-items: center;
   padding: 28px;
-  background: var(--bg);
+  background: var(--onix-color-surface-page);
 }
 
 .private-card {
@@ -1274,23 +1282,23 @@ function drawCanvas() {
   justify-items: center;
   gap: 9px;
   padding: 28px;
-  border: 1px solid var(--surface-active);
+  
   border-radius: 18px;
-  background: var(--surface-raised);
-  color: var(--text);
+  background: var(--onix-color-surface-floating);
+  color: var(--onix-color-text);
   text-align: center;
-  box-shadow: 0 18px 46px rgba(22, 34, 51, 0.12);
+  
 }
 
 .private-avatar {
   width: 108px;
   height: 108px;
-  border-radius: 999px;
+  border-radius: var(--onix-radius-pill);
   display: grid;
   place-items: center;
   overflow: hidden;
-  background: var(--surface-muted);
-  border: 4px solid var(--surface);
+  background: var(--onix-color-surface-muted);
+  
   font-size: 30px;
   font-weight: 900;
 }
@@ -1304,11 +1312,11 @@ function drawCanvas() {
 .private-lock {
   width: 34px;
   height: 34px;
-  border-radius: 999px;
+  border-radius: var(--onix-radius-pill);
   display: grid;
   place-items: center;
-  background: var(--surface-muted);
-  color: var(--muted);
+  background: var(--onix-color-surface-muted);
+  color: var(--onix-color-text-muted);
 }
 
 .private-card h1 {
@@ -1319,27 +1327,27 @@ function drawCanvas() {
 
 .private-card p {
   margin: 0;
-  color: var(--muted);
+  color: var(--onix-color-text-muted);
   font-weight: 800;
 }
 
 .private-card strong {
   margin-top: 4px;
-  color: var(--muted);
+  color: var(--onix-color-text-muted);
   font-size: 13px;
 }
 
 .private-follow {
   margin-top: 8px;
-  min-height: 42px;
-  border: 0;
-  border-radius: 999px;
+  min-height: var(--onix-control-md);
+  
+  border-radius: var(--onix-radius-pill);
   display: inline-flex;
   align-items: center;
   gap: 8px;
   padding: 0 18px;
-  background: var(--btn-primary-bg);
-  color: var(--btn-primary-text);
+  background: var(--onix-tone-solid);
+  color: var(--onix-tone-on-solid);
   font: inherit;
   font-weight: 900;
   cursor: pointer;
@@ -1353,9 +1361,9 @@ function drawCanvas() {
 .loader {
   width: 34px;
   height: 34px;
-  border-radius: 999px;
-  border: 3px solid transparent;
-  border-top-color: var(--text);
+  border-radius: var(--onix-radius-pill);
+  
+  
   animation: spin 0.8s linear infinite;
 }
 

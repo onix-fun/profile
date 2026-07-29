@@ -1,300 +1,98 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { RouterLink, useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
+import type { OnixGraphMenuMode } from "@onix/design-system";
 import { ContentService } from "@/shared/api/contentService";
-import type { AccountUser, CurrentActor } from "@/shared/api/types";
+import type { CurrentActor } from "@/shared/api/types";
 import { runtimeConfig } from "@/shared/config/runtime";
 import { accountSettingsUrl } from "@/features/profile/lib/accountLinks";
 import { contentUrl } from "@/shared/api/navigation";
+import { i18n } from "@/shared/i18n";
+import GraphMenu from "@/shared/ui/GraphMenu.vue";
+import type { GraphMenuItem } from "@/shared/ui/GraphMenu.vue";
+import OnixIcon from "@/shared/ui/OnixIcon.vue";
 
 const route = useRoute();
+const router = useRouter();
+const t = i18n.global.t;
 const actor = ref<CurrentActor | null>(null);
-const menuOpen = ref(false);
+const mode = ref<OnixGraphMenuMode>("main");
 
-const activeOwner = computed<AccountUser | null>(() => actor.value?.activeOwner || null);
-const isOrg = computed(() => activeOwner.value?.ownerType === "ORGANIZATION");
-const initials = computed(() => {
-  const source = activeOwner.value?.displayName || activeOwner.value?.username || "U";
-  return source.slice(0, 1).toUpperCase();
-});
-const ownerName = computed(() => activeOwner.value?.displayName || activeOwner.value?.username || "Account");
-const profilePath = computed(() => {
+const activeOwner = computed(() => actor.value?.activeOwner || null);
+const ownerName = computed(() => {
   const owner = activeOwner.value;
-  if (!owner) return "/u/me";
-  const prefix = owner.ownerType === "ORGANIZATION" ? "o" : "u";
-  return `/${prefix}/${encodeURIComponent(owner.username)}`;
+  return owner?.displayName || [owner?.firstName, owner?.lastName].filter(Boolean).join(" ") || owner?.username || t("nav.signIn");
 });
-const controlsHidden = computed(() => (
-  false
-));
-const headerVisible = computed(() => (
-  !controlsHidden.value
-  && route.path !== "/"
-  && route.name !== "Profile"
-  && route.name !== "SocialCanvas"
-));
-const settingsHref = computed(() => accountSettingsUrl(runtimeConfig.accountFrontendUrl, window.location.href));
+const accountHref = computed(() => accountSettingsUrl(runtimeConfig.accountFrontendUrl, window.location.href));
+const isProfileRoute = computed(() => route.name !== "Search");
+
+const mainItems = computed<GraphMenuItem[]>(() => [
+  { id: "account", label: ownerName.value, meta: activeOwner.value ? `@${activeOwner.value.username}` : undefined, icon: "user", avatarUrl: activeOwner.value?.avatarUrl, tone: "neutral" },
+  { id: "profile", label: t("nav.profile"), icon: "user", tone: "neutral", active: isProfileRoute.value },
+  { id: "feed", label: t("nav.feed"), icon: "home", tone: "neutral" },
+  { id: "create", label: t("nav.create"), icon: "add", tone: "pink" },
+]);
+const creationItems = computed<GraphMenuItem[]>(() => [
+  ...mainItems.value.map((item) => ({ ...item, disabled: item.id !== "create" })),
+  { id: "new-post", label: t("nav.createPost"), icon: "edit", tone: "info" },
+  { id: "new-story", label: t("nav.createStory"), icon: "film", tone: "pink" },
+  { id: "drafts", label: t("nav.drafts"), icon: "file", tone: "warning" },
+]);
+const items = computed(() => mode.value === "creation" ? creationItems.value : mainItems.value);
 
 onMounted(async () => {
-  try {
-    actor.value = await ContentService.currentActor();
-  } catch {
-    actor.value = null;
-  }
+  actor.value = await ContentService.currentActor().catch(() => null);
 });
 
-function closeMenu() {
-  menuOpen.value = false;
+function navigate(id: string) {
+  if (id === "create") {
+    mode.value = mode.value === "creation" ? "main" : "creation";
+    return;
+  }
+  mode.value = "main";
+  if (id === "account") window.location.assign(accountHref.value);
+  if (id === "profile") void router.push("/me");
+  if (id === "feed") window.location.assign(contentUrl("/", true));
+  if (id === "new-post") window.location.assign(contentUrl("/p/new", true));
+  if (id === "new-story") window.location.assign(contentUrl("/story/new", true));
+  if (id === "drafts") window.location.assign(contentUrl("/drafts", true));
 }
 
-function openCreatePost() {
-  closeMenu();
-  window.location.assign(contentUrl("/p/new", true));
-}
-
-function openCreateStory() {
-  closeMenu();
-  window.location.assign(contentUrl("/story/new", true));
+function openSearch() {
+  void router.push("/search");
 }
 </script>
 
 <template>
-  <div class="app-shell" @keydown.esc="closeMenu">
-    <header v-if="headerVisible" class="app-header" aria-label="Main navigation">
-      <a class="brand-mark" :href="contentUrl('/')" aria-label="Open feed">
-        <span class="brand-word">Onix</span>
-      </a>
-    </header>
-
-    <button
-      v-if="!controlsHidden"
-      class="avatar-menu-button"
-      :class="{ 'avatar-menu-button--org': isOrg }"
-      type="button"
-      aria-label="Open menu"
-      :aria-expanded="menuOpen"
-      @click="menuOpen = !menuOpen"
-    >
-      <img v-if="activeOwner?.avatarUrl" :src="activeOwner.avatarUrl" alt="" />
-      <i v-else-if="isOrg" class="pi pi-building"></i>
-      <span v-else>{{ initials }}</span>
-      <i class="pi pi-bars"></i>
+  <div class="app-shell" data-onix-tone="neutral" data-onix-density="comfortable" data-onix-surface-depth="0">
+    <div class="app-main" data-onix-app-content><slot /></div>
+    <button class="search-fab" type="button" :aria-label="t('nav.search')" @click="openSearch">
+      <OnixIcon name="search" :size="24" />
     </button>
-
-    <Transition name="menu-fade">
-      <aside v-if="menuOpen && !controlsHidden" class="account-menu" aria-label="Account menu">
-        <div class="account-menu__identity">
-          <div class="account-menu__avatar">
-            <img v-if="activeOwner?.avatarUrl" :src="activeOwner.avatarUrl" alt="" />
-            <i v-else-if="isOrg" class="pi pi-building"></i>
-            <span v-else>{{ initials }}</span>
-          </div>
-          <div>
-            <strong>{{ ownerName }}</strong>
-            <span>@{{ activeOwner?.username }}</span>
-          </div>
-        </div>
-
-        <nav class="account-menu__nav">
-          <a :href="contentUrl('/')" @click="closeMenu"><i class="pi pi-home"></i>Feed</a>
-          <RouterLink :to="profilePath" @click="closeMenu"><i :class="isOrg ? 'pi pi-building' : 'pi pi-user'"></i>Profile</RouterLink>
-          <RouterLink to="/search" @click="closeMenu"><i class="pi pi-search"></i>Search</RouterLink>
-          <button type="button" @click="openCreatePost"><i class="pi pi-plus-circle"></i>Create post</button>
-          <button type="button" @click="openCreateStory"><i class="pi pi-stopwatch"></i>Create story</button>
-          <a :href="settingsHref" @click="closeMenu"><i class="pi pi-cog"></i>Settings</a>
-        </nav>
-      </aside>
-    </Transition>
-
-    <main class="app-main">
-      <slot />
-    </main>
+    <GraphMenu :items="items" :mode="mode" :menu-label="t('nav.menu')" :close-label="t('nav.close')" @select="navigate" @close="mode = 'main'" />
   </div>
 </template>
 
 <style scoped>
-.app-shell {
-  min-height: 100dvh;
-  background:
-    radial-gradient(circle at 18% 22%, rgba(59, 130, 246, 0.08), transparent 28%),
-    linear-gradient(180deg, #ffffff 0%, #f7f9fb 100%);
-}
-
-.app-header {
+.app-shell,
+.app-main { min-height: 100dvh; background: var(--onix-color-surface-page); }
+.search-fab {
   position: fixed;
-  z-index: 80;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 76px;
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  padding: 18px clamp(18px, 3vw, 42px);
-  pointer-events: none;
-}
-
-.brand-mark,
-.avatar-menu-button {
-  pointer-events: auto;
-}
-
-.brand-mark {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  color: #111827;
-  text-decoration: none;
-  font-weight: 900;
-  letter-spacing: 0;
-}
-
-.brand-word {
-  font-size: 20px;
-}
-
-.avatar-menu-button {
-  position: fixed;
-  z-index: 86;
-  right: clamp(18px, 3vw, 42px);
-  bottom: max(22px, env(safe-area-inset-bottom));
-  width: 48px;
-  height: 48px;
-  border: 1px solid rgba(17, 24, 39, 0.1);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.76);
-  color: #111827;
-  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.13);
-  cursor: pointer;
-  overflow: visible;
-}
-
-.avatar-menu-button img,
-.avatar-menu-button > i,
-.avatar-menu-button > span {
-  width: 100%;
-  height: 100%;
-  display: grid;
-  place-items: center;
-  border-radius: inherit;
-  object-fit: cover;
-  font-weight: 900;
-}
-
-.avatar-menu-button--org {
-  border-color: #818cf8;
-  box-shadow: 0 14px 34px rgba(129, 140, 248, 0.2);
-}
-
-.avatar-menu-button i {
-  position: absolute;
-  right: -3px;
-  bottom: -3px;
-  width: 20px;
-  height: 20px;
-  display: grid;
-  place-items: center;
-  border-radius: 999px;
-  background: #111827;
-  color: #ffffff;
-  font-size: 10px;
-}
-
-.account-menu {
-  position: fixed;
-  z-index: 90;
-  right: clamp(14px, 3vw, 34px);
-  bottom: calc(max(22px, env(safe-area-inset-bottom)) + 64px);
-  width: min(320px, calc(100vw - 28px));
-  padding: 12px;
-  border: 1px solid rgba(15, 23, 42, 0.1);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 26px 70px rgba(15, 23, 42, 0.18);
-  backdrop-filter: blur(18px);
-}
-
-.account-menu__identity {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 8px 12px;
-  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
-}
-
-.account-menu__avatar {
-  width: 44px;
-  height: 44px;
-  display: grid;
-  place-items: center;
-  border-radius: 999px;
-  background: #111827;
-  color: #ffffff;
-  font-weight: 900;
-  overflow: hidden;
-}
-
-.account-menu__avatar img,
-.account-menu__avatar i {
-  width: 100%;
-  height: 100%;
-  display: grid;
-  place-items: center;
-  object-fit: cover;
-}
-
-.account-menu__identity strong,
-.account-menu__identity span {
-  display: block;
-}
-
-.account-menu__identity span {
-  color: #667085;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.account-menu__nav {
-  display: grid;
-  gap: 4px;
-  padding-top: 10px;
-}
-
-.account-menu__nav a,
-.account-menu__nav button {
-  width: 100%;
-  height: 42px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  z-index: calc(var(--onix-layer-modal) + 1);
+  inset-inline-start: max(var(--onix-space-4), env(safe-area-inset-left));
+  inset-block-end: max(var(--onix-space-4), env(safe-area-inset-bottom));
+  width: 3.25rem;
+  min-height: 3.25rem;
+  padding: 0;
   border: 0;
-  border-radius: 8px;
-  padding: 0 10px;
-  background: transparent;
-  color: #111827;
-  text-decoration: none;
-  font: inherit;
-  font-weight: 800;
+  border-radius: var(--onix-radius-pill);
+  color: var(--onix-color-tone-info-on-solid);
+  background: var(--onix-color-tone-info-solid);
+  box-shadow: var(--onix-shadow-floating);
   cursor: pointer;
+  pointer-events: auto;
+  transition: transform var(--onix-motion-base), box-shadow var(--onix-motion-fast);
 }
-
-.account-menu__nav a:hover,
-.account-menu__nav button:hover {
-  background: #f1f5f9;
-}
-
-.app-main {
-  min-height: 100dvh;
-}
-
-.menu-fade-enter-active,
-.menu-fade-leave-active {
-  transition: opacity 140ms ease, transform 140ms ease;
-}
-
-.menu-fade-enter-from,
-.menu-fade-leave-to {
-  opacity: 0;
-  transform: translateY(6px);
-}
+.search-fab:hover { transform: translateY(-2px); box-shadow: var(--onix-shadow-overlay); }
+.search-fab:focus-visible { box-shadow: 0 0 0 4px var(--onix-color-focus-halo), var(--onix-shadow-floating); }
 </style>

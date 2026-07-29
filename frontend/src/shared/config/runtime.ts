@@ -3,6 +3,8 @@ export interface ProfileRuntimeConfig {
   frontendBasePath: string;
   accountFrontendUrl: string;
   contentFrontendUrl: string;
+  preferenceCookieDomain: string;
+  embeddedParentOrigins: string[];
 }
 
 declare global {
@@ -17,10 +19,22 @@ function normalizePath(value: string, fallback: string): string {
 }
 
 const source = window.__PROFILE_CONFIG__ || {};
+const accountFrontendUrl = (source.accountFrontendUrl || "http://account.onix.localhost:8088").replace(/\/$/, "");
+const contentFrontendUrl = (source.contentFrontendUrl || "http://content.onix.localhost:8088").replace(/\/$/, "");
+
+function inferPreferenceCookieDomain(hostname: string): string {
+  if (hostname === "onix.fun" || hostname.endsWith(".onix.fun")) return ".onix.fun";
+  if (hostname === "onix.localhost" || hostname.endsWith(".onix.localhost")) return "onix.localhost";
+  return "";
+}
 
 export const runtimeConfig: ProfileRuntimeConfig = {
   apiBaseUrl: (source.apiBaseUrl || "/api").replace(/\/$/, ""),
   frontendBasePath: normalizePath(source.frontendBasePath || "/", "/"),
-  accountFrontendUrl: (source.accountFrontendUrl || "http://account.onix.localhost:8088").replace(/\/$/, ""),
-  contentFrontendUrl: (source.contentFrontendUrl || "http://content.onix.localhost:8088").replace(/\/$/, ""),
+  accountFrontendUrl,
+  contentFrontendUrl,
+  preferenceCookieDomain: source.preferenceCookieDomain?.trim() || inferPreferenceCookieDomain(window.location.hostname),
+  embeddedParentOrigins: source.embeddedParentOrigins?.length
+    ? source.embeddedParentOrigins.map((value) => new URL(value).origin)
+    : [new URL(accountFrontendUrl).origin, new URL(contentFrontendUrl).origin],
 };
